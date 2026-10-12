@@ -6,7 +6,14 @@ import { createFreshState, useEnterpriseStore } from '../src/store/enterpriseSto
 const store = () => useEnterpriseStore.getState();
 
 const resetStore = () => {
-  useEnterpriseStore.setState({ state: createFreshState(), saveFiles: [], validationError: null });
+  // demoMode/demoSnapshot 必须一起清：否则上一条用例残留的演示态会让下一条的 autoSaveGame 静默短路
+  useEnterpriseStore.setState({
+    state: createFreshState(),
+    saveFiles: [],
+    validationError: null,
+    demoMode: false,
+    demoSnapshot: null,
+  });
   localStorage.removeItem('enterpriseSaveFiles');
 };
 
@@ -50,6 +57,41 @@ describe('进出演示的内存隔离', () => {
   it('exitDemo 在没有快照时不毁掉当前屏', () => {
     const before = JSON.stringify(store().state);
     store().exitDemo();                   // 没进过演示就退出
+    expect(JSON.stringify(store().state)).toBe(before);
+  });
+
+  it('exitDemo 抢在宏任务队列排空前退出，积压的自动存档一帧也不落盘', async () => {
+    // 时序洞：nextQuarter 把 autoSaveGame 排在 setTimeout(…,0) 里，而闸门读的是"执行时刻"的 demoMode。
+    // 直接驱动 store 的四年 runner 会同步推完整局再 exitDemo，队列根本没排空过——
+    // 只在回调里加闸的话，积压的 N 发会在 demoMode 已为 false 后逐条通过，往老师的存档列表追加 N 帧。
+    store().saveGame();                   // 真落一帧，拿到基线字节
+    const baseline = localStorage.getItem('enterpriseSaveFiles');
+
+    store().enterDemo();
+    store().nextQuarter();                // 排程点 1（不 await）
+    store().nextQuarter();                // 排程点 2（不 await）
+    // 先确认真推进了两季：否则下面"字节不变"可能只是 nextQuarter 被别的门挡下、根本没排回调的空跑假绿
+    expect(store().state.operation.currentQuarter).toBe(3);
+    store().exitDemo();                   // 抢在两发回调之前退出
+
+    await new Promise((resolve) => setTimeout(resolve, 0));   // 让积压的宏任务跑完
+
+    expect(store().state.operation.currentQuarter).toBe(1);   // 老师的屏已换回开局态
+    expect(localStorage.getItem('enterpriseSaveFiles')).toBe(baseline);
+  });
+
+  it('演示态中重复 enterDemo 不会覆盖快照、毁掉老师当前屏', () => {
+    // 重入洞：enterDemo 无条件把"当时那一屏"拍成快照。演示态中再次进入（双击、或入口在演示态仍可见）
+    // 拍进去的就是演示局的屏，老师原屏只剩内存里被覆盖的引用——没手存过的进度直接没了。
+    store().discountReceivable(7);        // 让老师屏与开局态有可观察差异
+    const before = JSON.stringify(store().state);
+
+    store().enterDemo();
+    store().nextQuarter();                // 演示局推进一季
+    store().enterDemo();                  // 重入：修复前会把演示局 Q2 拍成新快照
+    store().exitDemo();
+
+    expect(store().demoMode).toBe(false);
     expect(JSON.stringify(store().state)).toBe(before);
   });
 });

@@ -545,6 +545,10 @@ export const useEnterpriseStore = create<{
   // 不用 module-level 变量存快照：那样会有第二个"真相来源"，React 侧看不见，而 store 顶层字段
   // 既不进存档序列化（saveGame 只 stringify state）也不进指纹作用域，放这里才是零副作用的位置。
   enterDemo: () => {
+    // 快照只能在**非演示态**拍摄：演示态中再次 enterDemo（双击、或入口在演示态仍可见）会把演示局那一屏
+    // 拍成快照，老师原屏只剩内存里被覆盖的引用——没手存过的进度就永久没了。
+    // 这是 store 层不变量，不是 UI 的事：UI 藏起入口是第二道，不是第一道。
+    if (get().demoMode) return;
     set((s) => ({
       demoSnapshot: JSON.parse(JSON.stringify(s.state)) as EnterpriseState,
       state: createFreshState(),
@@ -2989,10 +2993,15 @@ export const useEnterpriseStore = create<{
         }
       }
       
-      // 自动保存游戏
-      setTimeout(() => {
-        get().autoSaveGame();
-      }, 0);
+      // 自动保存游戏：演示态下**不排这一发**——回调是宏任务，而 demoMode 是执行时刻读的，
+      // 只要 exitDemo 抢在队列排空前跑完（同步推进整局的 runner 就会这样），积压的回调
+      // 会在 demoMode 已为 false 之后逐条通过，往老师的存档列表里追加 N 帧。
+      // autoSaveGame 首行那道闸保留：它管的是"有人直接调用它"这一路。
+      if (!get().demoMode) {
+        setTimeout(() => {
+          get().autoSaveGame();
+        }, 0);
+      }
       
       return {
         state: updatedState,
