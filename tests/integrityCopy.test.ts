@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { INTEGRITY_BOUNDARY, INTEGRITY_CAVEATS, CAUSE_TEXT } from '../src/utils/audit';
 import { SAVE_FORMAT_VERSION } from '../src/types/enterprise';
-import { RULE_SECTIONS } from '../src/components/RulesModal';
+import { RULE_SECTIONS, ruleTextFor } from '../src/components/RulesModal';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 // 文档里的操作路径按 markdown 习惯给每段加反引号，比对"路径是否真写了这两级"时先把反引号剥掉，
@@ -122,5 +122,27 @@ describe('面板接线：跨度取审计侧的 packageSpan，报告导出有失�
     expect(src).toContain('error.message');
     expect(src).not.toContain('error.name');
     expect(src).toContain('downloadFile(');
+  });
+});
+
+describe('规则条目可被讲解点稳定引用（演示模式规格 §4.3）', () => {
+  it('每个 section 有非空唯一 id，且节顺序与标题不变', () => {
+    const ids = RULE_SECTIONS.map((s) => s.id);
+    expect(ids).toHaveLength(RULE_SECTIONS.length);
+    expect(new Set(ids).size).toBe(ids.length);
+    ids.forEach((id) => expect(id).toBeTruthy());
+    expect(RULE_SECTIONS[0].id).toBe('ad');
+    expect(RULE_SECTIONS.map((s) => s.title)).toEqual([
+      '广告投放规则（本系统修改项）', '市场开发与准入', '销售会议与订单争取', '厂房与生产线',
+      '采购与生产', '产品研发与ISO认证', '融资与资金管理', '存档与完整性校验',
+      '费用、折旧与税金', '运营时间',
+    ]);
+  });
+
+  it('ruleTextFor 取到原文，越界返回 null 而不是崩或印 undefined', () => {
+    expect(ruleTextFor({ section: 'ad', item: 0 })).toBe(RULE_SECTIONS[0].items[0]);
+    expect(ruleTextFor({ section: 'ad', item: -1 })).toBeNull();
+    expect(ruleTextFor({ section: 'ad', item: 999 })).toBeNull();
+    expect(ruleTextFor({ section: 'nope', item: 0 })).toBeNull();
   });
 });

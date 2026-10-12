@@ -7,8 +7,13 @@ import { CAUSE_TEXT, INTEGRITY_BOUNDARY, INTEGRITY_CAVEATS } from '../utils/audi
 // 规则说明弹窗：内置运营规则（重点标注修改后的广告投放规则）
 // RULE_SECTIONS 导出给 tests/integrityCopy.test.ts：本仓库测试环境是 node、无 jsdom（规格 §7），
 // 渲染测不了，就断言**渲染要用的数据**——节是否存在、位置对不对、里面是不是那两个常量对象本身。
-export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[] }[] = [
+// 讲解点引用规则文案必须到条目级，所以 section 要有稳定 id（演示模式规格 §4.3）。
+// 用 title 当键的话，改一次文案就静默指错——roadmap §5.3 同款坑。
+export interface RuleRef { section: string; item: number }
+
+export const RULE_SECTIONS: { id: string; title: string; highlight?: boolean; items: string[] }[] = [
   {
+    id: 'ad',
     title: '广告投放规则（本系统修改项）',
     highlight: true,
     items: [
@@ -19,6 +24,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'market',
     title: '市场开发与准入',
     items: [
       '市场划分：本地（初始已准入）、区域、国内、亚洲、国际。',
@@ -28,6 +34,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'orders',
     title: '销售会议与订单争取',
     items: [
       '每年初召开销售会议（订货会），系统按已准入市场与产品资格生成当年订单池。',
@@ -36,6 +43,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'factory',
     title: '厂房与生产线',
     items: [
       '厂房参数：大厂房 买价40M/租金5M·年/容量6条线；小厂房 买价30M/租金3M·年/容量4条线。厂房不提折旧，折旧只针对生产线设备。',
@@ -51,6 +59,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'production',
     title: '采购与生产',
     items: [
       'R1、R2 订购提前1个季度；R3、R4 提前2个季度；到货入库时付款（现金不足计入应付款）。',
@@ -59,6 +68,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'rd-iso',
     title: '产品研发与ISO认证',
     items: [
       '本期运营仅开放 P2 研发：周期6个季度、总投资6M，按季度平均支付（1M/季），现金不足自动中断、恢复后自动续投。',
@@ -66,6 +76,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'finance',
     title: '融资与资金管理',
     items: [
       '长期贷款：每年年末申请，每次20M，未还本余额最多40M，年息10%，期限3年，年底付息、到期还本。',
@@ -75,6 +86,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'save',
     title: '存档与完整性校验',
     highlight: true,
     items: [
@@ -94,6 +106,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'cost',
     title: '费用、折旧与税金',
     items: [
       '综合费用：行政管理费（进入第4季度收取1M）、市场开拓费、产品研发费、ISO认证费、广告费、转产费、设备维护费、厂房租金等。',
@@ -101,6 +114,7 @@ export const RULE_SECTIONS: { title: string; highlight?: boolean; items: string[
     ],
   },
   {
+    id: 'time',
     title: '运营时间',
     items: [
       '共4年16个季度：每年年初（规划会议、订货会、支付应付税）→ 4个季度运营（出售厂房四个季度皆可）→ 年末（长贷、维护费、租金与厂房购买/租赁、折旧、市场/ISO投资、结账）。',
@@ -161,6 +175,13 @@ const RulesModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, on
       </div>
     </div>
   );
+};
+
+/** 按讲解点取回规则原文；取不到返回 null，由调用方退化显示步骤名（规格 §5） */
+export const ruleTextFor = (ref: RuleRef): string | null => {
+  const section = RULE_SECTIONS.find((s) => s.id === ref.section);
+  if (!section) return null;
+  return section.items[ref.item] ?? null;
 };
 
 export default RulesModal;
