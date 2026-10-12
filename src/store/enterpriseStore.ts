@@ -366,11 +366,21 @@ export const useEnterpriseStore = create<{
   // 旧档重述串的口径换算必须知道原版本才决定要不要重建，见 migrateState
   // resetCount 可选，取包内最近一帧的（与预览同一处）；不给就沿用本机计数，包里没有历史帧时正是如此
   applyImportedState: (state: EnterpriseState, fromVersion: number, resetCount?: number) => void;
+  // 课堂演示（规格 §4.2）：demoMode 与 demoSnapshot 刻意放在 state **外层**——
+  // saveGame/autoSaveGame 序列化的是 state 整体，逐帧指纹覆盖 {id,timestamp,version,resetCount,state}，
+  // 放进去会污染存档格式（要 bump SAVE_FORMAT_VERSION）并让演示标记进入核对报告与控制表数据源。
+  demoMode: boolean;
+  demoSnapshot: EnterpriseState | null;
+  // 进入：把当前屏拍进内存（不落盘），换一份开局态；退出：原样换回。
+  enterDemo: () => void;
+  exitDemo: () => void;
 }>((set, get) => ({
   state: initialState,
   saveFiles: [],
   resetCount: resetCount,
   validationError: null,
+  demoMode: false,
+  demoSnapshot: null,
 
   setValidationError: (message) => set({ validationError: message }),
 
@@ -423,6 +433,9 @@ export const useEnterpriseStore = create<{
 
   // 自动保存游戏（每季度调用）
   autoSaveGame: () => {
+    // 课堂演示期间自动存档整体停用（规格 §4.8 第 1 闸）：nextQuarter 每季都会排这一发（:2961），
+    // 跑满 4 年就是 16 帧塞进老师的存档列表。手动存档与导入落库由 UI 层禁用（第 2 闸）。
+    if (get().demoMode) return;
     const { state, resetCount } = get();
     const timestamp = Date.now();
     const date = new Date();
@@ -526,6 +539,25 @@ export const useEnterpriseStore = create<{
     });
     get().addOperationLog('导入存档', `设为当前进度：第${imported.operation.currentYear}年第${imported.operation.currentQuarter}季`
       + (fromVersion >= SAVE_FORMAT_VERSION ? '' : '（旧版存档已迁移至v4，建议重置开新局）'));
+  },
+
+  // 进入课堂演示：当前屏只拍进内存，换一份全新开局态（createFreshState 的 isPaused 本就是 false）。
+  // 不用 module-level 变量存快照：那样会有第二个"真相来源"，React 侧看不见，而 store 顶层字段
+  // 既不进存档序列化（saveGame 只 stringify state）也不进指纹作用域，放这里才是零副作用的位置。
+  enterDemo: () => {
+    set((s) => ({
+      demoSnapshot: JSON.parse(JSON.stringify(s.state)) as EnterpriseState,
+      state: createFreshState(),
+      demoMode: true,
+      validationError: null,
+    }));
+  },
+
+  // 退出演示：没有快照就什么都不动（幂等——浏览器刷新后 demoMode 已是 false，横幅不该再清一遍）
+  exitDemo: () => {
+    set((s) => (s.demoSnapshot
+      ? { state: s.demoSnapshot, demoSnapshot: null, demoMode: false, validationError: null }
+      : { demoSnapshot: null, demoMode: false }));
   },
 
   // 重置游戏
