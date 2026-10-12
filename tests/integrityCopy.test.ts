@@ -128,10 +128,16 @@ describe('面板接线：跨度取审计侧的 packageSpan，报告导出有失�
 describe('规则条目可被讲解点稳定引用（演示模式规格 §4.3）', () => {
   it('每个 section 有非空唯一 id，且节顺序与标题不变', () => {
     const ids = RULE_SECTIONS.map((s) => s.id);
-    expect(ids).toHaveLength(RULE_SECTIONS.length);
+    expect(RULE_SECTIONS).toHaveLength(10);
     expect(new Set(ids).size).toBe(ids.length);
     ids.forEach((id) => expect(id).toBeTruthy());
-    expect(RULE_SECTIONS[0].id).toBe('ad');
+    // id 的取值与顺序必须逐字钉死：只钉唯一性的话，把 finance 和 save 互换测试全绿，
+    // 但 ruleTextFor({section:'finance'}) 会静默印出另一节的原文（规格 §4.3）。
+    // 与下面的 title 数组断言配对，同时钉死 id 顺序与 id↔title 对应关系。
+    expect(ids).toEqual([
+      'ad', 'market', 'orders', 'factory', 'production',
+      'rd-iso', 'finance', 'save', 'cost', 'time',
+    ]);
     expect(RULE_SECTIONS.map((s) => s.title)).toEqual([
       '广告投放规则（本系统修改项）', '市场开发与准入', '销售会议与订单争取', '厂房与生产线',
       '采购与生产', '产品研发与ISO认证', '融资与资金管理', '存档与完整性校验',
