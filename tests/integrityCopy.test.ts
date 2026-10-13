@@ -13,6 +13,8 @@ import { RULE_SECTIONS, ruleTextFor } from '../src/components/RulesModal';
 // 这三份数据各改各的都不会有编译错——只有这里的守卫能让它当场变红。
 // ruleTextFor 已在上面那行引入，ESM 下同名绑定重复声明直接报错，不再写第二遍。
 import { PAUSE_POINTS, YEAR_INTENTS } from '../src/demo/script';
+// 剧本的新线要对着**开局状态**查配额（生产线类型余量），所以这里引入状态工厂而非读源码文本
+import { createFreshState } from '../src/store/enterpriseStore';
 import { CONTROL_STEPS } from '../src/utils/controlTable';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
@@ -160,6 +162,13 @@ describe('规则条目可被讲解点稳定引用（演示模式规格 §4.3）'
 
 // ══ 演示剧本引用的键必须真实存在（Task 6，规格 §4.3/§4.4）═══════════════════════
 describe('演示剧本引用的都是真实存在的东西（演示模式规格 §4.3/§4.4）', () => {
+  it('讲解点的 stepId 两两不同（重复的第二条经 pausePointFor 永不可达）', () => {
+    // pausePointFor 用 find：若表里混进同 stepId 的两条，第二条静默失效——面板停不下、也不报错。
+    // 这条断言就是 script.ts 注释里那句"自己数一遍"的替代网（Task 7 补）。
+    const ids = PAUSE_POINTS.map((p) => p.stepId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('每个讲解点的 stepId 都在 CONTROL_STEPS 里', () => {
     const ids = new Set(CONTROL_STEPS.map((s) => s.id));
     PAUSE_POINTS.forEach((p) => expect(ids.has(p.stepId)).toBe(true));
@@ -191,14 +200,20 @@ describe('演示剧本引用的都是真实存在的东西（演示模式规格 
     ([2, 3, 4] as const).forEach((y) => expect(YEAR_INTENTS[y].marketInvest).toContain('local'));
   });
 
-  it('剧本只声明全自动线（Task 4 复审裁定的可达防线）', () => {
-    // decide.ts 的投料折算 `Math.ceil(qty / line.productionPeriod)` 在 P1/P2 上是可证的数值 no-op
-    // （BOM 每项 qty=1），它只有在"慢线 + qty≥2 的料项"同时出现时才生效，而后半个条件被
-    // addProductionLine 的 product 形参（store:328 写死 P1|P2）挡死。所以真正该钉的是这条：
-    // 剧本若塞进半自动/手工/柔性线，引擎的周期节奏按 line.type 判（store:2458-2467），
-    // 产能与投料两处折算会立刻失真——宁可让这条断言先响。
+  it('剧本声明的新线在引擎配额内真建得出来（Task 7 实测校正）', () => {
+    // 原用例断"剧本只声明全自动线"，理由是慢线会让产能/投料两处折算失真。
+    // Task 7 第一次真跑把前提推翻了：`productionLineLimits.automatic = 2`（store:51-56）而开局
+    // 两条全自动线已在（line-1/line-2），配额从第 1 年起就是 0 剩——声明 automatic 只会撞
+    // store:925-932 的静默空操作，整局在第 2 年第 1 季停住。
+    // 折算失真是保守侧（`quarterlyMaterialDemand` 用 Math.ceil 宁多不少），不是错；
+    // 真错的是"这条线根本建不出来"。所以守卫换成按开局状态查配额。
+    const fresh = createFreshState();
+    const used = fresh.production.factories.flatMap((f) => f.productionLines);
     ([1, 2, 3, 4] as const).forEach((y) => {
-      YEAR_INTENTS[y].newLines.forEach((l) => expect(l.lineType).toBe('automatic'));
+      YEAR_INTENTS[y].newLines.forEach((l) => {
+        expect(used.filter((line) => line.type === l.lineType).length)
+          .toBeLessThan(fresh.productionLineLimits[l.lineType]);
+      });
     });
   });
 });

@@ -17,29 +17,49 @@ export const YEAR_INTENTS: Record<1 | 2 | 3 | 4, YearIntent> = {
   },
   2: {
     year: 2, adAmount: 2, orderCap: 4,
-    // 两条都上在全自动线上：P1 抬当年的量，P2 是第1年那 6M 研发的落点。
-    // 没有这条 P2 线，rdP2 买到的资格产能为 0，pickOrders 的 P2 池常年只剩成品库存 0——那 6M 是死钱。
-    // 代价是第2年多压 16M 分期投资：Task 7 的调参循环若把第3年末的现金关口压穿，先撤这条 P2 线，
-    // 不要撤短贷或去改第3年的还本安排（撤它只是少一个产品，撤关口是流程断掉）。
-    // 实际现金流比账面原值贵：全自动线建线当场付首付 16/4=4M（store:1010-1011），此后每次推进
-    // 对 installing 的线再扣一整期 4M（store:2402），进度到 4 才完工（store:2421-2429）——
-    // 4 期共 16M 加首付，**一条线 20M 现金流、账面只有 16M**，两条就是 40M。
+    // **为什么是一条半自动 P1 线**（Task 7 第一次真跑定的，草案的"第2年 +1 条全自动 P1"落不了地）：
+    // ① 全自动线建不出来——`productionLineLimits.automatic = 2`（store:51-56）而开局两条全自动线已在
+    //   （line-1/line-2），配额从第 1 年起就是 0 剩；引擎对超配额是 `return state` 静默空操作
+    //   （store:925-932，既不扣钱也不写 validationError），runner 按引用比较判成撞门。
+    //   同产能（1 件/季）只剩柔性线，24M 原值、现金流 30M（首付 6M + 4 期 × 6M），本局曲线接不住。
+    // ② 原草案"全自动线"的价钱也标低了：一条全自动线现金流是 **20M**（首付 16/4=4M + 每次推进扣一整期
+    //   4M × 4 期，store:1010-1011/:2402/:2421-2429），账面原值才 16M——不是本文件早前注释说的"多压 16M"。
+    //   半自动同理：现金流 **12M**（首付 4M + 2 期 × 4M）、账面原值 8M，产能还打对折（productionPeriod 2
+    //   → 1 件/2 季）。
+    // ③ 只留一条：草案的第 2 年两条线（含那条 P2 落点线）实测把第 3 年末关口压穿（缺 14M）。
+    //   撤哪一项的次序见规格 §4.4 回写与本任务报告——先撤资本开支，不撤短贷。
+    //   P2 因此在本局只有资格、没有产能：`productRD.P2.completed === true` 但一条 P2 线也没上，
+    //   第 3 年起 P2 订单进池却一张也选不到（`commitableUnits('P2')` 为 0）。
+    //   要把 P2 落点真做出来，得先修 decide.ts 的 `productionSteps`——它每季都重复吐 `newLines[0]`
+    //   （`alreadyInvested < wanted` 只数条数、不推进到下标），声明两条只会得到两条一模一样的线。
     newLines: [
-      { factoryId: 'factory-1', lineType: 'automatic', product: 'P1' },
-      { factoryId: 'factory-1', lineType: 'automatic', product: 'P2' },
+      { factoryId: 'factory-1', lineType: 'semi-automatic', product: 'P1' },
     ],
-    rdP2: false, marketInvest: ['local', 'regional'], isoInvest: [],
+    // 国内市场从**第 2 年**开始投：`MARKET_DEVELOP_YEARS.domestic = 2`，Y2+Y3 两年投满才赶得上
+    // 第 4 年 Q1 的订单池（草案是 Y3/Y4 投，那要第 5 年才可用，等于零回报）。实测这一改换来
+    // 终局现金 +2M、权益 +1M（有无国内投资的对照见 Task 7 报告 M2 vs M7）。
+    rdP2: false, marketInvest: ['local', 'regional', 'domestic'], isoInvest: [],
     shortLoanQuarters: [1], longLoan: false, cashPad: 8,
   },
   3: {
     year: 3, adAmount: 2, orderCap: 5, newLines: [], rdP2: false,
     marketInvest: ['local', 'regional', 'domestic'], isoInvest: [],
-    shortLoanQuarters: [1], longLoan: false, cashPad: 8,
+    // Q1 与 Q3 各一笔短贷（每次 20M）：Q1 那笔是**续贷**——第 2 年 Q1 借的 20M 恰在跨入第 3 年 Q1
+    // 时到期 21M，不续就当季付不出；Q3 那笔才是撑过第 3 年末关口的增量（到期日 abs 15 = 第 4 年 Q3，
+    // 落在关口之后）。只留 Q1 的写法实测在第 3 年第 4 季被拒"本季度现金收支后将透支（缺口 19M）"，
+    // 两笔都删（草案的第 3 年只在 Q1 借、且把 Q1 那笔删掉）同样过不去——见报告 M1/M11/M12。
+    shortLoanQuarters: [1, 3], longLoan: false, cashPad: 8,
   },
   4: {
     year: 4, adAmount: 2, orderCap: 5, newLines: [], rdP2: false,
+    // ISO9000 按草案保留（第 4 年才起投，`ISO_REQUIRED_YEARS.ISO9000 = 2` → 终局停在 certifying）。
+    // 实测代价：现金 −1M、权益 −2M，而 `src` 里没有任何引擎消费方读 ISO 状态（不进订单池生成、
+    // 不参与选单/交货门）——它买到的只有进度条与账面费用。要留白就把它改空，见规格 §4.4 回写。
     marketInvest: ['local', 'regional', 'domestic'], isoInvest: ['ISO9000'],
-    shortLoanQuarters: [], longLoan: true, cashPad: 6,
+    // 第 4 年不再申请长贷：草案留它当缓冲，实测不需要（不加也零撞门跑满 16 季，终局现金 8M）。
+    // 加了则是现金 26M 但 gameOver 时挂 20M 长贷不改 2M 全年息——终局报告无轧差口径，
+    // 观感是"借了不用还"。§4.4 的"收官申请长贷"因此作废。
+    shortLoanQuarters: [], longLoan: false, cashPad: 6,
   },
 };
 
@@ -61,9 +81,9 @@ export const PAUSE_POINTS: { stepId: string; rule: RuleRef }[] = [
 
 /**
  * 查讲解点。用 find 而不是 filter：每个 stepId 只该停一次（规格 §4.6），表里若混进重复 stepId，
- * 第二条不可达、静默失效。**注意这条不变式当前没有测试守着**——守卫用例只验 stepId 是否
- * 存在于 CONTROL_STEPS（tests/integrityCopy.test.ts），不验唯一性，所以加条目时自己数一遍：
- * 当前 12 条的 stepId 两两不同（b-4/q-17/b-2/q-3/q-6/q-10/q-8/q-14/q-11/q-15/e-1/e-5）。
+ * 第二条不可达、静默失效。唯一性由 tests/integrityCopy.test.ts 的
+ * `expect(new Set(ids).size).toBe(ids.length)` 钉住（Task 7 补的网），加条目时不必再靠人数列一遍；
+ * 当前 12 条：b-4/q-17/b-2/q-3/q-6/q-10/q-8/q-14/q-11/q-15/e-1/e-5。
  */
 export const pausePointFor = (stepId: string): { stepId: string; rule: RuleRef } | undefined =>
   PAUSE_POINTS.find((p) => p.stepId === stepId);
