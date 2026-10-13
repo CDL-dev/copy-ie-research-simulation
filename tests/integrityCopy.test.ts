@@ -31,6 +31,9 @@ const auditSrc = readFileSync(new URL('../src/utils/audit.ts', import.meta.url),
 const saveLoadSrc = panelSrc;
 const pageSrc = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
 const demoPanelSrc = readFileSync(new URL('../src/components/DemoPanel.tsx', import.meta.url), 'utf8');
+// 最终审查修复波（必修 1）：「导出运行控制表」那颗按钮住在 OperationCenter 里，
+// 下面那组邻近性断言要读它的源码文本（与 saveLoadSrc 同一套办法，不渲染组件）。
+const operationCenterSrc = readFileSync(new URL('../src/components/OperationCenter.tsx', import.meta.url), 'utf8');
 
 const SAVE_SECTION = '存档与完整性校验';
 const sectionItems = (): string[] => {
@@ -290,5 +293,26 @@ describe('演示面板的界面说法与 README 一致', () => {
     expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyLongTermLoan\}/);
     expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyShortTermLoan\}/);
     [ '申请20M长期贷款', '申请20M短期贷款' ].forEach((text) => expect(pageSrc).toContain(text));
+  });
+
+  // ══ 最终审查修复波（必修 1）：两个「依赖本机存档帧」的导出动作在演示期禁用 ═════════
+  // 整分支审查证实：`buildYearControlTable` 的 q-1 季初盘点与 q-20 本季结余两列取的是 `saves`
+  // （`getSaveFiles()` 当场读 localStorage），而演示局**没有帧**（那是刻意的隔离）——于是导出的
+  // CSV 里那两列是老师上一局同年季的数、其余 28 行是演示局的账：一份混两份账的文件。
+  // `buildSavePackage(state, getSaveFiles())` 同形（current 是演示局、saves 是老师的真实帧）。
+  // 断法与上面那三条一致：邻近性——onClick 之后 160 字符内必须有带 demoMode 的 disabled，
+  // 而不是 `expect(src).toContain('demoMode')` 那种删光闸门也不会红的形状（文件里别处一句注释就能满足它）。
+  it('导出运行控制表在演示中被置灰（它的两列取的是本机存档帧，演示局没有帧）', () => {
+    expect(operationCenterSrc).toMatch(
+      /onClick=\{\(\) => handleExportYear\(year\)\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/
+    );
+    expect(operationCenterSrc).toContain('课堂演示中不可用：本表的季初盘点与本季结余两列取自本机存档帧');
+  });
+
+  it('导出存档包在演示中被置灰（包里的 current 与 saves 是两份账）', () => {
+    expect(saveLoadSrc).toMatch(
+      /onClick=\{handleExport\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/
+    );
+    expect(saveLoadSrc).toContain('课堂演示中不可用：导出的包里 current 是演示局、saves 是本机历史帧');
   });
 });

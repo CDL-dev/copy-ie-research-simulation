@@ -180,7 +180,7 @@ const DemoPanel: React.FC<{ onOpenRules: () => void }> = ({ onOpenRules }) => {
 
       {phase === 'finished' && (
         <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-sm text-green-700">
-          四年运营已跑完。可以点各大中心查看结果、导出运行控制表；退出演示后本机进度自动恢复。
+          四年运营已跑完。可以点各大中心查看结果（「导出运行控制表」与「导出存档包」演示期不可用，理由写在按钮提示里）；退出演示后本机进度自动恢复。
         </div>
       )}
     </aside>

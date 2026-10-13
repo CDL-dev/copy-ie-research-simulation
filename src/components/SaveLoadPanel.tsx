@@ -90,7 +90,10 @@ const SaveLoadPanel: React.FC = () => {
   //    退出演示后顶部「重置次数」就虚增一格，此后每帧的名字与逐帧指纹作用域（都含 resetCount）跟着带上这个虚数。
   //    （原先这里还挂着两条理由，Task 8 审查判为失实、已删：`resetGame` 根本不碰 runner 的队列，
   //     而"演示中换掉当前屏"本就是演示沙盒的本意，把它们写在这儿等于给下一个人扩大禁用面的借口。）
-  // 导出类只读动作（导出存档包 / 核对报告 txt/json / 导入预览）保持可用：老师要导演示局的资料当板书（§4.8 第 2 闸）。
+  // 导出类动作里，只有「导出存档包」在演示期禁用（必修 1 的处置）：它导的 `saves` 来自 `getSaveFiles()`
+  // 当场读 localStorage，演示局没有帧，包会变成"current 是演示局 + saves 是老师的真实帧"的混账产物。
+  // 仍然可用的只读动作：核对报告 txt/json（数据源＝导入预览里那份包，不读本机帧）、导入预览、
+  // 「取消」、存档列表的只读展示。规格 §4.8 第 2 闸与 §10 条 20 记的是同一件事。
   const demoMode = useEnterpriseStore((s) => s.demoMode);
 
   // 加载本地存档
@@ -106,7 +109,8 @@ const SaveLoadPanel: React.FC = () => {
     setLocalSaveFiles(getSaveFiles());
   };
 
-  // 导出存档包：只读动作，暂停态照常可用（规格 §7.10）——它只下载文件，不碰任何状态
+  // 导出存档包：暂停态照常可用（规格 §7.10）——它只下载文件，不碰任何状态；
+  // 但**演示期禁用**（必修 1）：包里 `saves` 取自 `getSaveFiles()`，演示局没有帧，那部分只能是老师的旧账。
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -304,10 +308,14 @@ const SaveLoadPanel: React.FC = () => {
               手动存档
             </button>
             {/* 导出放在两个安全动作之间，重置游戏仍留在最右——破坏性按钮不夹在中间 */}
+            {/* 最终审查修复波（必修 1）：演示期禁用「导出存档包」——`buildSavePackage(state, getSaveFiles())`
+                导出的包里 `current` 是演示局、`saves` 是本机历史帧（老师的上一局），两份账会混在一个包里；
+                与 OperationCenter 那颗「导出运行控制表」同一形、同一处置。核对报告 txt/json 不受影响
+                （它们的数据源是导入预览里那份**包本身**与当场算出的结论，从不读本机帧，见上面 handleExportReport）。 */}
             <button
               onClick={handleExport}
-              disabled={exporting}
-              title="下载含全部历史快照与指纹的 JSON 文件，可在其它浏览器导入"
+              disabled={exporting || demoMode}
+              title={demoMode ? '课堂演示中不可用：导出的包里 current 是演示局、saves 是本机历史帧，两份账会混在一个包里' : '下载含全部历史快照与指纹的 JSON 文件，可在其它浏览器导入'}
               className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
             >
               {exporting ? '导出中…' : '导出存档包'}

@@ -619,6 +619,15 @@ const YearlyExportButtons: React.FC<{
   financialLogs: FinancialLogRecord[];
   currentYear: number;
 }> = ({ allSaveFiles, financialLogs, currentYear }) => {
+  // 最终审查修复波（必修 1）：演示期禁用本颗按钮。理由是**这份产物有两列根本不读演示局**——
+  // `buildYearControlTable` 的 q-1「季初现金盘点」与 q-20「本季结余」优先取存档帧
+  // （utils/controlTable.ts:54 的 `quarterStartSnapshot` 与 :133 的 `snapshotCash`），
+  // 而这里的 `allSaveFiles` 是主组件 :1035 那句 `getSaveFiles()` 当场读 localStorage 的结果。
+  // 演示局**没有帧**（那是刻意的内存隔离，规格 §4.2），于是导出的 CSV 里这两列是**老师上一局
+  // 同年季的数**、其余 28 行是演示局的账——一份混两份账的文件，比"这个按钮现在不能用"更糟。
+  // 存档包同形（`SaveLoadPanel.tsx` 的「导出存档包」一并禁用）。要让演示期也能导这两件产物，
+  // 得把取数源从本机存档帧换成内存态，那是新架构、明确超出本期（规格 §10 条 20）。
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
   const handleExportYear = (year: number) => {
     const table = buildYearControlTable(year, financialLogs, allSaveFiles);
     const csvContent = toCSV(table, year);
@@ -644,9 +653,10 @@ const YearlyExportButtons: React.FC<{
           <button
             key={year}
             onClick={() => handleExportYear(year)}
-            disabled={!hasData}
+            disabled={!hasData || demoMode}
+            title={demoMode ? '课堂演示中不可用：本表的季初盘点与本季结余两列取自本机存档帧，演示局没有帧，导出会把上一局的数混进来' : hasData ? `导出第${year}年运行控制表（CSV）` : '该年度尚无运营记录'}
             className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center space-x-1 ${
-              hasData
+              hasData && !demoMode
                 ? 'bg-blue-600 text-white hover:bg-blue-700'
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
