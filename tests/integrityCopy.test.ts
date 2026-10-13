@@ -275,5 +275,20 @@ describe('演示面板的界面说法与 README 一致', () => {
   it('暂停运营与待支付应付税在演示中被置灰（各说得出理由）', () => {
     expect(pageSrc).toContain('课堂演示期间不可用');
     expect(pageSrc).toMatch(/onClick=\{payTaxes\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/);
+    // Task 9 收尾：上面那两句各有归属问题——`toContain('课堂演示期间不可用')` 自 page.tsx:60 给
+    // 「待支付应付税」补 title 起就不再唯一属于暂停按钮（删掉 `:77` 的 `disabled={demoMode}` 仍绿），
+    // 而那条 `toMatch` 只管得到 payTaxes。照它的写法给 togglePaused 也补一条邻近性断言。
+    expect(pageSrc).toMatch(/onClick=\{togglePaused\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/);
+  });
+
+  // 同形的两处口子（Task 9 收尾）：财务中心那两颗贷款按钮 dispatch 的是与 runner 同一个 action，
+  // 老师在演示期点一下就把 `q-3`（短贷）/ `e-1`（长贷）那一步**抢跑**掉——不写盘、打死不了演示，
+  // 但读数会变成老师没讲过的形状（多一笔 20M、多一条台账）。判据与「待支付应付税」同一式：
+  // disabled 表达式里必须有 demoMode，且离它自己那颗按钮的 onClick 不超过 160 字符。
+  // 断言方向与上面相反（这两处 JSX 里 disabled 写在 onClick 之前），不是笔误。
+  it('申请长期/短期贷款在演示中被置灰（与待支付应付税同一判据）', () => {
+    expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyLongTermLoan\}/);
+    expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyShortTermLoan\}/);
+    [ '申请20M长期贷款', '申请20M短期贷款' ].forEach((text) => expect(pageSrc).toContain(text));
   });
 });

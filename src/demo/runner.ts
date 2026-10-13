@@ -128,8 +128,8 @@ const advanceOne = (): { ok: boolean } => {
   const [head, ...rest] = runner.queue;
   // 队列空掉只可能是编排漏了推进步：宁可停出来说话，也不要在这里偷偷 expand() 重跑一遍本季
   // （重跑会二次投广告、二次下单，那是数据损坏而不是停住）。
-  // 「老师跳掉了本季最后一步」那一条**不从这里走**——skipBlocked() 当场就停住并把话说清（修 C），
-  // step() 见到那个私有开关直接不动，所以这句「编排层有 bug」只在真是编排漏步时才可能印出来。
+  // 「老师跳掉了本季最后一步」与「终局后再按 `→`」这两条**都不从这里走**：skipBlocked() 当场停住并把话说清（修 C），
+  // step() 见 queueExhausted 或 finished 早退。原先这里写"只在真是编排漏步时才可能印出来"是被证伪的（Task 9 收尾）。
   if (!head) {
     const op = useEnterpriseStore.getState().state.operation;
     useDemoRunner.setState({
@@ -243,6 +243,12 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
     // 队列被「跳过此步」跳空之后就不再多走一步（修 C）：advanceOne 的空队列分支只描述
     // "编排漏了推进步"，这一格却是老师亲手跳掉的，不该由单步键或快捷键再撞出那句假报错。
     if (queueExhausted) return;
+    // 终局后同理（Task 9 收尾）：`→` 键的守卫只看 `phase !== 'idle'`，所以 finished 仍会打到这儿，
+    // 而队列此时是空的——一路走下去就是把 `finished` 翻成 `blocked` 并印出「编排层有 bug」那句假报错。
+    // 面板那颗「单步」按钮早已用 `phase !== 'finished'` 置灰，快捷键那一侧没有 canWalk 可用，
+    // 所以这道判断放在 runner 里（两条早退同源，也与 skipQuarter 的 `finished` 早退对称）；
+    // 键位判据因此保持原样，不在两处各写一份同样的判断。
+    if (get().phase === 'finished') return;
     advanceOne();
   },
 
@@ -288,7 +294,7 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   // 语义原先写在面板的 JSX 里（`useDemoRunner.setState((s) => ({ queue: s.queue.slice(1), phase: 'paused', blocked: null }))`），
   // 视图层伸手改 runner 的私有形状，还没考虑"丢弃后队列空了"这一格：
   // 被拒的正是本季唯一的推进步（规格 §5 点名的"第 3 年末透支被拒"）时，那一下就把它跳成了空队列，
-  // 下一发单步撞上 advanceOne 的 :124-131，报出一句"编排层有 bug"——把审计者指向错的模块。
+  // 下一发单步撞上 advanceOne 的 :133-139，报出一句"编排层有 bug"——把审计者指向错的模块。
   skipBlocked: () => {
     clearTimer();
     const r = get();

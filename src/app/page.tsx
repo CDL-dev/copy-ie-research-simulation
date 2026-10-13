@@ -96,7 +96,8 @@ export default function Home() {
       让位后 main 还与页眉不同轴（1920 下左移约 168px）。
       改成给这三条横幅 + `<main>` 套一层**全宽外套**、把右边距打在外套上：`container` 的 100% 宽度
       按缩减后的父宽算，居中与不遮挡同时成立，琥珀横幅与校验错误横幅也跟着让位，窄视口不再被咬一角。
-      页眉右簇的同一颗让位放在 DemoPanel 的流内占位块里（那里没有全宽外套可穿，只能推 flex 行尾）。
+      页眉那一侧用同一写法、同一数值（它自己也有一颗全宽外套），两处因此同轴；
+      旧方案那句"页眉右簇的让位放在 DemoPanel 的流内占位块里"已放弃——抽屉在流外，占位块推不动 static 的页眉右簇。
       外套这颗不随抽屉折叠而缩：折叠状态住在 DemoPanel 内部（界面偏好，不进 runner/store），
       page.tsx 拿不到它；收起态下主内容右侧多空出一条窄边到 360px 的空白——不遮挡、不跳动，是这笔交换的代价。 */}
       <div className={demoMode ? 'mr-[360px]' : ''}>
@@ -276,8 +277,9 @@ export default function Home() {
                       </div>
                       <button 
                         className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 disabled:bg-blue-300"
-                        disabled={finance.longTermLoan.amount >= 40 || state.operation.currentQuarter !== 4}
+                        disabled={finance.longTermLoan.amount >= 40 || state.operation.currentQuarter !== 4 || demoMode}
                         onClick={applyLongTermLoan}
+                        title={demoMode ? '课堂演示期间不可用：长贷由演示剧本按年排步，手动点会抢走 runner 排在第4季的那一步、把读数改成老师没讲过的形状' : '每年年末申请：每次20M，最多40M，3年期10%'}
                       >
                         申请20M长期贷款
                       </button>
@@ -330,8 +332,9 @@ export default function Home() {
                       </div>
                       <button 
                         className="w-full bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600 disabled:bg-green-300"
-                        disabled={finance.shortTermLoan.amount >= 40 || ![1, 3].includes(state.operation.currentQuarter)}
+                        disabled={finance.shortTermLoan.amount >= 40 || ![1, 3].includes(state.operation.currentQuarter) || demoMode}
                         onClick={applyShortTermLoan}
+                        title={demoMode ? '课堂演示期间不可用：短贷由演示剧本按季排步，手动点会抢走 runner 排在第1或第3季的那一步、把读数改成老师没讲过的形状' : '第1、3季度申请：每次20M，最多40M，1年期5%'}
                       >
                         申请20M短期贷款
                       </button>

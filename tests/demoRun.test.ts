@@ -260,7 +260,7 @@ describe('skipQuarter 的相位（审查修 3）', () => {
   // 一起盖掉了（第 2 轮修 2）。两笔后果：
   // ① 终局后按一次 Shift+→：`finished` → `paused`，队列已空、play() 见 queue.length===0 直接 return，
   //    面板的"已完成"读数丢失、播放键死住；
-  // ② 队列已空那个 blocked 标记（runner.ts:124-131）被抹成 `phase:'paused'` 而 `blocked` 字段还在
+  // ② 队列已空那个 blocked 标记（runner.ts 的 advanceOne :133-139）被抹成 `phase:'paused'` 而 `blocked` 字段还在
   //    → 报错区有文字、相位却说正常。
   // 这一条钉的是 ①（② 由同一个相位判断一起修掉：只有从 playing 进来才落 paused）。
   it('终局后 skipQuarter 不把 finished 盖成 paused', () => {
@@ -269,6 +269,19 @@ describe('skipQuarter 的相位（审查修 3）', () => {
     runner().skipQuarter();
     expect(runner().phase).toBe('finished');
     expect(runner().queue).toHaveLength(0);
+  });
+
+  // 上面那条钉的是 Shift+→；`→`（单步）那一侧原先仍是敞口：skipQuarter 的循环有 `phase === 'finished'`
+  // 早退，step() 却只挡 `queueExhausted`，于是终局后按一次 `→` 就进 advanceOne 的空队列分支，
+  // 把 `finished` 翻成 `blocked` 并印出那句「编排层有 bug」——终局读数丢失，还把审计者指向编排层。
+  it('终局后 step() 不把 finished 翻成 blocked，也不冒出「编排层有 bug」', () => {
+    driveFullRun();
+    expect(runner().phase).toBe('finished');    // 前置：真是终局，不是一开始就空队列
+    expect(runner().queue).toHaveLength(0);
+    runner().step();
+    expect(runner().phase).toBe('finished');
+    expect(runner().blocked).toBeNull();
+    expect(store().state.operation.currentYear).toBe(5);   // 一步没走、也没重跑任何季
   });
 });
 
