@@ -36,7 +36,7 @@
 | P3/P4 类型字段仍残留，且存在绕过订单池的手工录入旁路 | `src/types/enterprise.ts:83,129,153,213`；`addAvailableOrder` 在 `src/` 有 4 处引用 |
 | 已知缺陷与取舍已记录在规格，不在别处 | `docs/superpowers/specs/2026-10-03-factory-trade-design.md` §10.1–§10.4 |
 
-测试规模：`npx vitest run`（**在工作树内跑**，见 §5.9）→ **293 通过 / 18 文件**（2026-10-07 实测，`feature/save-integrity`）。此前记录的 284 是 S-T8 复审修复轮之前的规模；更早的 114 通过 / 12 文件是 §2 那次核查时的规模；`npm test` 若在主检出里显示 24 文件/228 例，那是 `.worktrees/` 副本被重复扫描的假数。
+测试规模：`npx vitest run`（**在工作树内跑**，见 §5.9）→ **293 通过 / 18 文件**（2026-10-07 实测，`feature/save-integrity`）。此前记录的 284 是 S-T8 复审修复轮之前的规模；更早的 114 通过 / 12 文件是 §2 那次核查时的规模；`npm test` 若在主检出里显示 24 文件/228 例，那是 `.worktrees/` 副本被重复扫描的假数。**课堂演示模式落地后另记一次：364 通过 / 22 文件**（2026-10-13 实测，`feature/demo-mode` 工作树内；新增的 4 个测试文件是 demoIsolation / demoDecide / demoOrchestration / demoRun，README「开发说明」同此）。
 
 ---
 
@@ -84,6 +84,7 @@
 - **P3/P4 产品线**：课程本期只开放 P1/P2。类型里的 P3/P4 字段和 `addAvailableOrder` 旁路属**待清理的死代码**，不是待开发的功能。
 - **在导出器里再加一层过滤**：控制表填充规则已在 2026-10-04 统一为"有事件即填描述串"（§4.12 口径），要精简"无到货/无到期短贷"这类空转注记只能改**日志层**，退回导出器过滤会重新制造双规则。
 - **IndexedDB 迁移 / PWA 离线包**：依 §3 P0 的实测体积作废（16 帧合计 0.54MB 对约 5MB 配额，用掉一成）。只有真出现"同一浏览器要放全班存档"或"单局帧数远超 16"这类用法时才回到本节改结论，不要先建库再找理由。
+- **演示模式的失败分支与专题局**：本期只做"完整 4 年、不断流"的一局自动演示（规格 §7 范围外）。断流示范与按主题跳转的专题局各是另一套剧本与另一套起始状态，等课堂真用过一轮再说。
 
 ---
 
@@ -108,11 +109,13 @@
 15. **`nextQuarter` 的链头锚定与审计不同序（行为分叉，比第 11 条重）**：`enterpriseStore.ts:2152-2154` 用严格 `>` 的 reduce 取最大 timestamp（同毫秒时留**数组里先出现**的那条），而 `restatement.ts:45` 与 `audit.ts:126-127` 定的是 `timestamp || id.localeCompare` 全序。两条 summary 同毫秒（脚本式/自动化推进）就会让 store 锚在与审计不同的行上 → 把错口径的 `cashChange` **永久写进存档** → B≠A → 假 `restated-log`。待办：链头取数改走同一个 `latestSummaryOf`（基于 `byTimeThenId`），种子查找改用 `isSeedLog`。**注意别顺手统一的一处**：store 的回退 `seedCash || initialCash` 与审计的 `null`/`no-anchor` 回退**刻意不同**——store 必须写出一个数，审计必须不许编数。
 16. **规格 §4.4/§4.5 曾落后于代码（本轮已改）**：§4.4 的公式原写 `kind === 'flow'`，实现是 `kindOfLog`（正是 round-3 finding N1 的修法）；§4.5 的字段清单未列两条余地、`指纹口径` 行、`重置次数`、`packageDigestScope: 'declared-not-reverified'`、`frameDigests`/`reportFileName`，以及 `unavailable:*` 翻成人话。代码是**更诚实的超集**，所以改的是文档。**留给后续的判断**：今后每加一行印面都要回写 §4.5，否则文档又会变成"少说"的版本。
 17. **S-T7 冒烟欠的视觉验收**：连接器逐字报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE: viewport=0x0, visible=false, attached=false`，所以截图/像素观感、真实文件选择器、OS 级落盘、多帧（~0.6MB）与 `unavailable:*`/真篡改包的浏览器路径仍是 NOT VERIFIED（`evaluate_script` 只证明了 DOM 与 `getComputedStyle` 层面）。**测试全绿不等于这三条已验。**
-18. **半自动线分期口径疑点（S-T1 登记，至今未查证）**：8M 的线付 12M——首付 4M（`enterpriseStore.ts:888-889`）+ 两期分期各 4M（`:2262`），描述却写"共2期"。与本分支无关，测试注释已如实描述现状，需要独立立项判定"是规则如此还是多收 4M"。
+18. **半自动线分期口径疑点（S-T1 登记，至今未查证）**：8M 的线付 12M——首付 4M（`enterpriseStore.ts:888-889`）+ 两期分期各 4M（`:2262`），描述却写"共2期"。与本分支无关，测试注释已如实描述现状，需要独立立项判定"是规则如此还是多收 4M"。**课堂演示 Task 9 实测给出了它的通式，见第 23 条**：多付的那一期不是半自动独有，四种线型一律多付一期，这一条与第 23 条宜并成同一个判定题。**行号请按第 23 条走**：本条那两个坐标是 S-T1 那次核查的位置，在当前工作树里已不对应首付与分期那两段（Task 9 逐个 grep 核实为 `:1009-1014` 与 `:2401-2436`）。
 19. **`rdLog`/`q-1`/`q-7` 三处 `newCash` 与统一回填链口径不同**（各自忽略 materialPayment/totalInstallPayments/autoProcessFees/短贷/应付）。今天没有消费方读它当现金链；一旦有人读就错——这是规格 §4.4「`newCash` 不作判据」的反面保险。
 20. **`a.click()` 抛错时漏 `removeChild`/`revokeObjectURL`**，以及重复 id 让存档列表两行共用一个 React key：S-T5 裁定"单点改反而制造不一致"（仓库既有两处导出同款），宜与 `SaveLoadPanel.tsx` 的 `downloadFile` 一起收。
 21. **展示表的行内字段类型未逐字段校验**（S-T6 遗留）：`rawMaterialOrders`/`advertisements`/`availableOrders`/`selectedOrders` 的条目只要求"是对象"，缺字段会印成 `undefined`（可见的错值，不崩）。是否收紧待定。
 22. **`.superpowers/` 曾被 `.gitignore` 漏掉**（本轮已加）：SDD 台账与冒烟产物一度处于"未跟踪但一条 `git add -A` 就入库"的状态。另注意 `.worktrees/factory-trade` 已是**孤儿目录**而非登记中的工作树（`git worktree list` 只两条），`git worktree prune` 不会删它，需手工清理（台账记录它曾被 node PID 58536 占用）。
+23. **生产线分期多付一期（课堂演示 Task 9 实测挂号，与第 18 条同族）**：`addProductionLine` 当场扣首付 `purchasePrice / max(installationPeriod, 1)`（`src/store/enterpriseStore.ts:1009-1014`，现金门在 `:1012-1014`），而 `nextQuarter` 对 `status === 'installing'` 的线**每次推进再扣一整期**（`:2401-2436`，同一式子 `line.purchasePrice / Math.max(line.installationPeriod, 1)`），到 `installationProgress >= installationPeriod` 才转 running——首付那次也被计进了期数，于是每条线的**现金流出＝原值 ×（期数＋1）÷ 期数**：全自动 **20M**（原值 16M）、半自动 **12M**（8M）、柔性 **30M**（24M）。而那条分期日志的文案是「安装投资分期」、`:1009` 的注释是"按安装周期平均支付投资"，读起来应当正好等于原值。**这就是第 18 条的通式**：多付一期不是半自动线独有，也不是它"多收 4M"的特例，四种线型一律如此；判定题（是规则如此还是引擎多收）请按本条坐标一次做掉两条。本期未动 store。演示侧的处理是让 floor 把"下一次推进要扣的那一期"按在建线数计进 `estAutoOutlay`（`src/demo/decide.ts:225-230`），所以四年局仍零撞门跑通，代价是剧本第 2 年只敢上一条线（README「课堂演示模式（教师用）」已把它写成使用侧事实）。
+24. **`startProduction` 不校验 `line.status`（引擎侧，Task 9 挂号）**：`src/store/enterpriseStore.ts:1263-1290` 那串守卫只查未暂停、找得到线、设了产品、`inProgressProducts === 0`、料齐、现金够加工费，随后 `:1303` **无条件**写 `{ status: 'running', inProgressProducts: 1 }`——`installing` / `converting` / `maintaining` 的线照样能被人工点成 running，安装期与转产期就此被绕过（`installing` 线被点开后 `:2401` 那个分期分支也不再进，剩余各期不再扣）。课堂演示本期**只在决策层守**：`src/demo/decide.ts:20-22` 的白名单 `PRODUCIBLE_STATUS` 决定哪条线可以排开工步（`productionSteps` 在 `:157` 用它筛），store 侧未修。真修要给 `startProduction` 补状态门、同时定死"installing 线到底能不能提前开工"，并回头改 `ProductionCenter` 那颗按钮的可用性判定——演示侧白名单随后可以退役，别留成两套口径。
 
 ---
 
@@ -122,4 +125,4 @@
 - P1：任选一次现金断流，复盘页能指出是哪笔操作、哪个季度造成的，且金额与已导出的控制表逐格对得上。
 - P2：资产负债表恒等式在任意年份任意操作后都成立（资产 = 负债 + 权益），亏损年所得税为 0。
 - P3：同一状态下推演分叉不改变原状态；`npx vitest run` 在改动前后都绿。
-- 通用：`directions/` 永远不被改动；不新增依赖；产品文案与代码字符串一致（上一版靠人工逐条核对，31 条学生可见陈述全部对代码验证过，这个做法应固定下来）——**存档这条已固化成测试**：`tests/integrityCopy.test.ts` 断言能力边界那句在报告首行/规则弹窗/README 三处是**同一个常量对象**，并断言 README 与弹窗写下的界面说法（按钮名、`-imported-N`、`哈希未计算`、三类不符措辞）在源码里真存在。其余文案仍靠人工。
+- 通用：`directions/` 永远不被改动；不新增依赖；产品文案与代码字符串一致（上一版靠人工逐条核对，31 条学生可见陈述全部对代码验证过，这个做法应固定下来）——**存档这条已固化成测试**：`tests/integrityCopy.test.ts` 断言能力边界那句在报告首行/规则弹窗/README 三处是**同一个常量对象**，并断言 README 与弹窗写下的界面说法（按钮名、`-imported-N`、`哈希未计算`、三类不符措辞）在源码里真存在。其余文案仍靠人工。**课堂演示那一节同样人工逐条核对**（README「课堂演示模式（教师用）」里出现的每个按钮名与界面说法都回源码验过，核对清单在 `.superpowers/sdd/2026-10-12-demo-mode/task-9-report.md`），并且其中"闸门"那一类**已经固化成断言**：`tests/integrityCopy.test.ts` 按邻近性逐个核 `demoMode` 是否真挂在对应按钮自己的 `onClick` 旁（存档面板六个 + 顶栏两个 + 财务中心两颗贷款按钮），删掉任意一处就红那一条。
