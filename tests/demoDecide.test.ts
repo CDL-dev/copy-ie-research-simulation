@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { createFreshState } from '../src/store/enterpriseStore';
 import type { EnterpriseState, Order, ProductionLine, RawMaterialOrder } from '../src/types/enterprise';
 import {
-  commitableUnits, deliverySteps, materialSteps, pickOrders, productionSteps, quarterlyMaterialDemand,
+  commitableUnits, deliverySteps, estAutoOutlay, materialSteps, pickOrders, productionSteps,
+  quarterlyMaterialDemand, rescueSteps,
 } from '../src/demo/decide';
 import type { YearIntent } from '../src/demo/types';
 
@@ -160,17 +161,20 @@ describe('投料与开工', () => {
     const slow = s.production.factories[0].productionLines[0];   // line-1，本用例的唯一变量
     // 挂 P3（2×R2 + 1×R3）而不是 P1：P1/P2 的 BOM 每一项都是 1，ceil(1/N) 恒等于 1，
     // 折算在只跑全自动 P1/P2 的当前剧本里根本体现不出来，必须借 qty ≥ 2 的料项才能观察差额。
+    // P3 只是算术夹具：运营侧无入口（store:328 addProductionLine 的 product 只收 P1/P2），真状态里不会出现。
     slow.product = 'P3';
-    slow.productionPeriod = 1;                       // 参照：周期 1 季 = 每季吃掉整套
+    // type 必须跟 productionPeriod 一起改：引擎的完工节奏按 type 判（store:2458-2467），
+    // 只改周期的夹具是"全自动线周期 2"这种引擎造不出的状态，读的人拿去对完工逻辑就错了。
+    slow.productionPeriod = 1; slow.type = 'automatic';          // 参照：周期 1 季 = 每季吃掉整套
     const perCycle = quarterlyMaterialDemand(s);
-    slow.productionPeriod = 2;                       // 半自动：2 季一周期
+    slow.productionPeriod = 2; slow.type = 'semi-automatic';     // 半自动：2 季一周期
     const folded = quarterlyMaterialDemand(s);
     // line-2 是全自动 P1、全程没动，所以 R2 这一项完全来自 line-1：改前/改后两次调用求差
     expect(perCycle.R2).toBe(2);
     expect(folded.R2).toBe(1);
     expect(perCycle.R2 - folded.R2).toBe(1);
 
-    slow.productionPeriod = 3;                       // 手工线：3 季一周期
+    slow.productionPeriod = 3; slow.type = 'manual';             // 手工线：3 季一周期
     const manual = quarterlyMaterialDemand(s);
     expect(manual.R2).toBe(1);   // ceil(2/3) = 1——写成 floor 就是 0，等于让这条线整季停产
     expect(manual.R3).toBe(1);   // ceil(1/3) = 1，同理
@@ -178,8 +182,24 @@ describe('投料与开工', () => {
     // 反向钉住：全自动线（productionPeriod 1）折算后必须与折算前逐字相同，现有用例才不用改期望值。
     // 也是"P1 这类 qty=1 的 BOM 项即使挂到慢线上也不会被少算"这条保证的落点。
     slow.product = 'P1';
-    slow.productionPeriod = 2;
+    slow.productionPeriod = 2; slow.type = 'semi-automatic';
     expect(quarterlyMaterialDemand(s)).toEqual({ R1: 2, R2: 0, R3: 0, R4: 0 });
+  });
+
+  // 除零面守卫：productionPeriod 为 0（异常存档/夹具）时 ceil(qty/0) = Infinity，缺口会膨胀成
+  // Infinity 的单；NaN 一侧更隐蔽——need <= 0 与 shortfall > 0 双双为 false，整季静默不下单。
+  // 修法口径：0 或负数一律按 1 季周期折算——宁可按最快节奏多备料，也不让一条线静默没料。
+  it('productionPeriod 为 0 时需求仍是有限正数，materialSteps 照下单', () => {
+    const s = createFreshState();
+    const line = s.production.factories[0].productionLines[0];   // line-1，全自动 P1
+    line.productionPeriod = 0;
+    const demand = quarterlyMaterialDemand(s);
+    expect(Number.isFinite(demand.R1)).toBe(true);   // 改前：ceil(1/0) = Infinity
+    expect(demand.R1).toBe(2);                       // 按 1 季周期折算：与 line-2 各 1
+    const steps = materialSteps(s);
+    expect(steps).toEqual([
+      { stepId: 'q-6', op: { kind: 'placeRawMaterialOrder', materialType: 'R1', quantity: 1 } },
+    ]);
   });
 
   it('R1 提前 1 季到货：缺口 = 需求×(提前期+1) − 在手 − 在途', () => {
@@ -256,5 +276,39 @@ describe('投料与开工', () => {
       id: 'line-new-1', status: 'installing', builtInYear: 1, inProgressProducts: 0,
     });
     expect(productionSteps(s, withPlan).some((d) => d.stepId === 'q-8')).toBe(false);
+  });
+});
+
+describe('保守预算与贴现自救', () => {
+  it('第3年第4季跨年末时，预算含 40M 本金 + 4M 利息（规格 §4.5 的硬约束）', () => {
+    const s = createFreshState();
+    s.operation.currentYear = 3;
+    s.operation.currentQuarter = 4;
+    // 长贷 termQuarters 每年末 -4：第1、2年末各减 4 后剩 4，跨入第4年即到期
+    s.finance.loans = s.finance.loans.map((l) => (l.kind === 'long' ? { ...l, termQuarters: 4 } : l));
+    expect(estAutoOutlay(s)).toBeGreaterThanOrEqual(44);
+  });
+
+  it('非跨年末的季度不含长贷本息与租金维护', () => {
+    const s = createFreshState();
+    expect(estAutoOutlay(s)).toBeLessThan(10);
+  });
+
+  it('现金低于下界时贴现到刚好够，且金额是 7 的倍数', () => {
+    const s = createFreshState();
+    s.finance.cash = 2;
+    s.finance.accountsReceivable = [0, 0, 0, 30];
+    const steps = rescueSteps(s, intent({ cashPad: 10 }));
+    expect(steps).toHaveLength(1);
+    const op = steps[0].op;
+    expect(op.kind).toBe('discountReceivable');
+    expect(op.kind === 'discountReceivable' && op.amount % 7).toBe(0);
+  });
+
+  it('应收不够救不回就不生成贴现步（留给 nextQuarter 报出真实缺口）', () => {
+    const s = createFreshState();
+    s.finance.cash = 1;
+    s.finance.accountsReceivable = [0, 0, 0, 3];
+    expect(rescueSteps(s, intent({ cashPad: 10 }))).toEqual([]);
   });
 });
