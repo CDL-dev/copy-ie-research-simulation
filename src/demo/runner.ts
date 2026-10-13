@@ -107,8 +107,9 @@ const selectStepsAfterMeeting = (): RunningStep[] => {
  * 执行一步，返回是否被拒。判据用 **state 引用**而不是 validationError：
  * 成功路径都返回新的 state 对象，被拒路径只塞一句 validationError（store 各门的既有写法），
  * 所以"引用没变"才是结构性的失败信号；validationError 只负责提供那句人话原因。
- * store 里还有 `return state` 式的静默守卫（如 :1497 原料类型找不到、:2016 订单已交），
+ * store 里还有 `return state` 式的静默守卫（如 :1533 原料类型找不到、:2051 订单不存在或已交），
  * 它们不改引用也不报错——那种情况自己造一句原因，别让它静默滑过去。
+ * 行号是 Task 7 真跑时逐个查过的，不是抄来的。
  */
 const advanceOne = (): { ok: boolean } => {
   const runner = useDemoRunner.getState();
