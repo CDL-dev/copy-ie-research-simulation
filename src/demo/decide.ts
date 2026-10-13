@@ -65,13 +65,18 @@ type MaterialProductKey = keyof typeof PRODUCT_BOM;
  * installing / converting / maintaining 的线下一季要开工就得提前备料——投料带提前期（materialSteps 的
  * leadTime + 1）正是为此；把 installing 剔掉，第 2 年新线会一整季没料。
  * 只有 selling 排除：待售残线不再产出，为它备料是纯浪费。
+ * 与 commitableUnits（本文件上方）的产能口径同为按 productionPeriod 折算，两处若改必须一起改：
+ * 一个把周期折算成"本年能出几件"、一个折算成"每季吃几套料"，任一侧单独动就会让备料和排产对不上账。
  */
 export const quarterlyMaterialDemand = (s: EnterpriseState): Record<MaterialId, number> => {
   const demand: Record<MaterialId, number> = { R1: 0, R2: 0, R3: 0, R4: 0 };
   for (const line of linesOf(s)) {
     if (!line.product || line.status === 'selling') continue;
     for (const [type, qty] of Object.entries(PRODUCT_BOM[line.product as MaterialProductKey])) {
-      demand[type as MaterialId] += qty ?? 0;
+      // 每季均摊这条线的 BOM 消耗：productionPeriod 季的周期里只投一套料。
+      // 向上取整——宁可多备一季的量（多压 1M/个料款，且 §4.5 的现金垫会接住），
+      // 也不能少备（少料会让线整季停产，那是演示流程断掉，比多花钱严重）。
+      demand[type as MaterialId] += Math.ceil((qty ?? 0) / line.productionPeriod);
     }
   }
   return demand;
