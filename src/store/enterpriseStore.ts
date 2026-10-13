@@ -433,8 +433,8 @@ export const useEnterpriseStore = create<{
 
   // 自动保存游戏（每季度调用）
   autoSaveGame: () => {
-    // 课堂演示期间自动存档整体停用（规格 §4.8 第 1 闸）：nextQuarter 每季都会排这一发（:2961），
-    // 跑满 4 年就是 16 帧塞进老师的存档列表。手动存档与导入落库由 UI 层禁用（第 2 闸）。
+    // 课堂演示期间自动存档整体停用（规格 §4.8 第 1 闸）：nextQuarter 每季都会排这一发（排程点在 :3000-3004，
+    // 那一处本分支也挂了 `!get().demoMode`——回调是宏任务，积压到 demoMode 已为 false 之后才跑就拦不住了）。跑满 4 年就是 16 帧塞进老师的存档列表。手动存档与导入落库由 UI 层禁用（第 2 闸）。
     if (get().demoMode) return;
     const { state, resetCount } = get();
     const timestamp = Date.now();
