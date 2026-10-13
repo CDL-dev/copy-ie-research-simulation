@@ -86,6 +86,19 @@ describe('选单', () => {
     }
   });
 
+  // 与 quarterlyMaterialDemand 的除零守卫（下方"productionPeriod 为 0"用例）是同一除零面：
+  // productionPeriod=0 → floor(quartersLeft/0)=Infinity → 任何大单都判"够得着"；NaN → 整年零选单。
+  // 两处若改必须一起改（见 commitableUnits 上方注释），守卫口径也一致：兜底按 1 季周期。
+  it('productionPeriod 为 0 时可承诺量仍是有限数，与周期 1 等值', () => {
+    const s = createFreshState();
+    const line = s.production.factories[0].productionLines[0];
+    const baseline = commitableUnits(s, 'P1');   // 周期 1 的参照值（开局 15 件）
+    line.productionPeriod = 0;
+    const got = commitableUnits(s, 'P1');
+    expect(Number.isFinite(got)).toBe(true);     // 改前：floor(4/0) = Infinity
+    expect(got).toBe(baseline);                  // 兜底按 1 季周期折算，与周期 1 逐字相同
+  });
+
   it('P1 与 P2 分池算可承诺量：P1 挤占不影响 P2 入选', () => {
     const s = createFreshState();
     // 开局没有 P2 线，塞一条在产全自动 P2 线：在手 2 件 + 每季 1 件 × 4 季 = P2 池 6 件
@@ -280,25 +293,66 @@ describe('投料与开工', () => {
 });
 
 describe('保守预算与贴现自救', () => {
-  it('第3年第4季跨年末时，预算含 40M 本金 + 4M 利息（规格 §4.5 的硬约束）', () => {
+  // 修 6：旧断言 ≥44 只钉得住本金、钉不住利息（4 息 + 40 本 + 3 租金 + 2 维护 = 49，删掉利息仍 45 ≥ 44）。
+  // 49 的构成（第3年第4季 → 跨入第4年第1季，跨年结算）：
+  //   长贷 40M@10% 年末利息 4；termQuarters 4 ≤ 4 → 到期本金 40；
+  //   factory-2 小厂房 leasedThisYear → annualRent 3；
+  //   line-1/line-2 builtInYear 0 < 结束年 3 → 维护 1+1 = 2。合计 4+40+3+2 = 49。
+  it('第3年第4季跨年末时，预算精确等于 49M＝长贷息 4 + 本金 40 + 租金 3 + 维护 2', () => {
     const s = createFreshState();
     s.operation.currentYear = 3;
     s.operation.currentQuarter = 4;
     // 长贷 termQuarters 每年末 -4：第1、2年末各减 4 后剩 4，跨入第4年即到期
     s.finance.loans = s.finance.loans.map((l) => (l.kind === 'long' ? { ...l, termQuarters: 4 } : l));
-    expect(estAutoOutlay(s)).toBeGreaterThanOrEqual(44);
+    expect(estAutoOutlay(s)).toBe(49);
   });
 
-  it('非跨年末的季度不含长贷本息与租金维护', () => {
+  // 修 5：旧断言 toBeLessThan(10) 是无对照的负断言（反向实现漏掉整段跨年分支也得 7 仍绿）。
+  // 开局态实算为 0，直接钉死；下面两条正向锚再把"预算不是恒 0"钉住。
+  it('开局状态（第1年第1季）预算恰为 0', () => {
     const s = createFreshState();
-    expect(estAutoOutlay(s)).toBeLessThan(10);
+    expect(estAutoOutlay(s)).toBe(0);
+  });
+
+  it('正向锚：进入第4季时含行政管理费 1', () => {
+    const s = createFreshState();
+    s.operation.currentQuarter = 3;   // 跨入第4季：admin=1，其余项开局态全为 0
+    expect(estAutoOutlay(s)).toBe(1);
+  });
+
+  it('正向锚：到期短贷按本息 21 计入', () => {
+    const s = createFreshState();
+    // drawnAbs -2 + termQuarters 4 === nextAbs 2 → 到期：本金 20 + 利息 20×5% = 1（rules.ts:69-71）。
+    // 负 drawnAbs＝开局前放贷，与初始长贷 drawnAbs 的写法同源（store:24）。
+    s.finance.loans.push({ id: 'short-due', kind: 'short', principal: 20, rate: 0.05, drawnAbs: -2, termQuarters: 4 });
+    expect(estAutoOutlay(s)).toBe(21);
+  });
+
+  // 修 1：引擎每季季初（q-4）无条件全额归还当前应付（store:2233），与是否跨年无关。
+  // 旧实现只在跨年季计入，非跨年季少算一笔 → floor 偏低 → 该贴现时不贴现。
+  it('应付账款按每季计：非跨年那季也含本季要还的 5M', () => {
+    const s = createFreshState();
+    s.operation.currentQuarter = 2;   // 跨入第3季，非跨年
+    s.finance.accountsPayable = 5;
+    expect(estAutoOutlay(s)).toBe(5);
+  });
+
+  // 修 2：规格 §4.5 的枚举里有"安装分期"，旧实现漏了；引擎对在建线每次推进自扣一期
+  // （store:2402-2408），且这条扣费有独立硬门（store:2404-2406 → :2496-2498）。
+  it('安装分期计入预算：一条在建全自动线贡献 16/4 = 4M', () => {
+    const s = createFreshState();
+    s.production.factories[0].productionLines.push(
+      lineLike(s, { id: 'line-inst', status: 'installing', purchasePrice: 16, installationPeriod: 4, inProgressProducts: 0 }),
+    );
+    // 开局两条线都是 running（installationPeriod 0），这 4M 完全来自新塞的在建线
+    expect(estAutoOutlay(s)).toBe(4);
   });
 
   it('现金低于下界时贴现到刚好够，且金额是 7 的倍数', () => {
     const s = createFreshState();
     s.finance.cash = 2;
     s.finance.accountsReceivable = [0, 0, 0, 30];
-    const steps = rescueSteps(s, intent({ cashPad: 10 }));
+    const steps = rescueSteps(s, intent({ cashPad: 10 }), 0);
     expect(steps).toHaveLength(1);
     const op = steps[0].op;
     expect(op.kind).toBe('discountReceivable');
@@ -309,6 +363,17 @@ describe('保守预算与贴现自救', () => {
     const s = createFreshState();
     s.finance.cash = 1;
     s.finance.accountsReceivable = [0, 0, 0, 3];
-    expect(rescueSteps(s, intent({ cashPad: 10 }))).toEqual([]);
+    expect(rescueSteps(s, intent({ cashPad: 10 }), 0)).toEqual([]);
+  });
+
+  // 修 3 的函数级锚：季初现金够旧下界 ≠ 够新下界。spent 就是 decide 自己本季要发出的手动支出。
+  it('spent 抬高下界：季初够钱、算上本季自有支出后必须贴现', () => {
+    const s = createFreshState();
+    s.finance.cash = 9;
+    s.finance.accountsReceivable = [0, 0, 0, 14];
+    expect(rescueSteps(s, intent({ cashPad: 6 }), 0)).toEqual([]);   // 下界 6 ≤ 9，不救
+    const steps = rescueSteps(s, intent({ cashPad: 6 }), 5);         // 下界 6+5=11 > 9，救
+    expect(steps).toHaveLength(1);
+    expect(steps[0].op.kind).toBe('discountReceivable');
   });
 });

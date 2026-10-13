@@ -4,11 +4,11 @@ import type { EnterpriseState, ProductionLine } from '../types/enterprise';
 // PRODUCT_BOM：投料与开工（Task 4）用它算每件成品要哪些料各几个；
 // 资金侧（Task 5）用 absQuarter/fromAbsQuarter 定位"跨入的下一季"、用 rules 的结算纯函数预算引擎自动扣费。
 import {
-  absQuarter, annualRent, DISCOUNT_UNIT, fromAbsQuarter, PRODUCT_BOM,
+  absQuarter, annualRent, DISCOUNT_UNIT, fromAbsQuarter, PROCESS_FEE, PRODUCT_BOM,
   settleDueShortLoans, settleLongLoansAtYearEnd,
 } from '../utils/rules';
 import type { MaterialId } from '../utils/rules';
-import type { DemoStep, PlayableProduct, YearIntent } from './types';
+import type { DemoOp, DemoStep, LineType, PlayableProduct, YearIntent } from './types';
 
 export const linesOf = (s: EnterpriseState) =>
   s.production.factories.flatMap((f) => f.productionLines);
@@ -31,7 +31,12 @@ export const commitableUnits = (s: EnterpriseState, product: PlayableProduct): n
   const quartersLeft = 4 - s.operation.currentQuarter + 1;
   const makeable = linesOf(s)
     .filter((l) => l.product === product && PRODUCIBLE_STATUS.has(l.status))
-    .reduce((sum, l) => sum + l.inProgressProducts + Math.floor(quartersLeft / l.productionPeriod), 0);
+    // 除零守卫与备料侧 quarterlyMaterialDemand 同口径（那边注释写明"两处若改必须一起改"）：
+    // productionPeriod 0/负数/NaN → floor(q/period) 得 Infinity（任何大单都判"够得着"）或 NaN（整年零选单）。
+    .reduce((sum, l) => {
+      const period = l.productionPeriod > 0 ? l.productionPeriod : 1;
+      return sum + l.inProgressProducts + Math.floor(quartersLeft / period);
+    }, 0);
   const stock = s.logistics.finishedProducts.find((p) => p.type === product)?.quantity ?? 0;
   const promised = s.marketing.selectedOrders
     .filter((o) => !o.isDelivered && o.productType === product)
@@ -190,7 +195,8 @@ export const deliverySteps = (s: EnterpriseState): DemoStep[] => {
 
 /**
  * 跨入"下一季"那一刻引擎会自动扣掉的钱（规格 §4.5）。刻意只列**引擎会自己扣**的项：
- * 手动动作（加工费、广告、市场投资）各有自己的现金门，撞了由 runner 报出来，不在这里复算——
+ * 手动动作（加工费、广告、市场投资、上线首期）不在这里复算——它们由本文件的 ownSpend 按
+ * "将要执行的那几步"单独汇总，一并进 rescueSteps 的下界；其余没进序列的手动门撞了仍由 runner 报出来。
  * 复算 `nextQuarter` 那 790 行只会造出第二套会漂的规则。缺一项的后果是演示停下来说得出缺口，
  * 多算一项的后果只是演示保守一点。
  */
@@ -202,23 +208,79 @@ export const estAutoOutlay = (s: EnterpriseState): number => {
   const shortDue = settleDueShortLoans(s.finance.loans, nextAbs).due;
   const long = crossesYearEnd ? settleLongLoansAtYearEnd(s.finance.loans) : { interest: 0, principalRepaid: 0 };
   const rent = crossesYearEnd ? annualRent(s.production.factories) : 0;
-  // 维护费免当年建成（store:2611 用 builtInYear < closingYear），closingYear 即刚结束那年
+  // 维护费免当年建成（store:2647 用 builtInYear < closingYear，closingYear 定义在 :2608-2609），
+  // closingYear 即刚结束那年；本行 year 是进入的新年，故 year - 1 === closingYear
   const maintenance = crossesYearEnd
     ? linesOf(s).filter((l) => l.builtInYear < year - 1).reduce((sum, l) => sum + l.maintenanceCost, 0)
     : 0;
   const admin = quarter === 4 ? 1 : 0;
   const rd = s.production.productRD.P2.status === 'active' ? 1 : 0;
-  const payable = crossesYearEnd ? s.finance.accountsPayable : 0;
+  // 应付账款每季都计（修 1）：到货季现金不足挂账后，引擎在**下一季季初**全额归还
+  // （store:2233 无条件读当前值、:2245-2246 记账、:2781-2786 计入实付净额；归还门 :2234-2236
+  // 排在总透支门之前）。决策时刻的当前值就是下一季季初要还的数，与是否跨年无关。
+  const payable = s.finance.accountsPayable;
+  // 安装分期（修 2，规格 §4.5 枚举项）：每次推进对 status==='installing' 的线按
+  // purchasePrice / installationPeriod 自扣（store:2402-2408），且有独立硬门（:2404-2406 → :2496-2498）。
+  // 与"本季新建线付的首期"不重叠：首期由 ownSpend 计，这一项是**下一次推进**要扣的那一期。
+  const installing = linesOf(s)
+    .filter((l) => l.status === 'installing')
+    .reduce((sum, l) => sum + l.purchasePrice / Math.max(l.installationPeriod, 1), 0);
   const arriving = s.logistics.rawMaterialOrders
     .filter((o) => o.arrivalPeriod === nextAbs)
     .reduce((sum, o) => sum + o.quantity * o.price, 0);
 
-  return shortDue + long.interest + long.principalRepaid + rent + maintenance + admin + rd + payable + arriving;
+  return shortDue + long.interest + long.principalRepaid + rent + maintenance + admin + rd + payable + installing + arriving;
 };
 
-/** 季末现金垫：预算 + 剧本基线垫；贴现取"够到它的最小 7 的倍数"，救不回就不动（规格 §9-5 后备顺序第 1 档） */
-export const rescueSteps = (s: EnterpriseState, intent: YearIntent): DemoStep[] => {
-  const floor = estAutoOutlay(s) + intent.cashPad;
+/**
+ * addProductionLine 的首期款。公式来源（实测行号，非猜测）：enterpriseStore.ts:1009-1011
+ * `firstPayment = purchasePrice / Math.max(installationPeriod, 1)`，现金门在 :1012-1014。
+ * 参数表镜像 store:935-976 的 lineConfig 里首付用到的两个字段：
+ * 全自动 16/4=4、半自动 8/2=4、手工无安装期 → 整额 5 即付、柔性 24/4=6。
+ * decide 不 import store（文件头契约），所以镜像而非引用——多算少算都由保守侧兜（见 estAutoOutlay 注释）。
+ */
+const LINE_INVESTMENT: Record<LineType, { purchasePrice: number; installationPeriod: number }> = {
+  automatic: { purchasePrice: 16, installationPeriod: 4 },
+  'semi-automatic': { purchasePrice: 8, installationPeriod: 2 },
+  manual: { purchasePrice: 5, installationPeriod: 0 },
+  flexible: { purchasePrice: 24, installationPeriod: 4 },
+};
+
+const lineFirstPayment = (op: Extract<DemoOp, { kind: 'addProductionLine' }>): number => {
+  const c = LINE_INVESTMENT[op.lineType];
+  return c.purchasePrice / Math.max(c.installationPeriod, 1);
+};
+
+/** decide 自己在本季发出去的手动现金支出（修 3）。金额全部来自将要执行的那几步，不是复算引擎。 */
+const ownSpend = (steps: DemoStep[], s: EnterpriseState): number => {
+  let spend = 0;
+  for (const d of steps) {
+    switch (d.op.kind) {
+      case 'payTaxes': spend += s.finance.taxesPayable; break;     // 年初一次交清（store:758-770）
+      case 'placeAdvertisement': spend += d.op.amount; break;
+      case 'investMarketDevelopment': spend += 1; break;           // 门与扣费都是 1M（store:1820/1837）
+      case 'investISOCertification': spend += 1; break;            // 同上（store:1900）
+      case 'investProductR_D': spend += 1; break;                  // 启动步不传 amount → 默认一期 1M（store:824-828）
+      case 'startProduction': spend += PROCESS_FEE; break;         // 开工当场付加工费（store:1288-1297）
+      case 'addProductionLine': spend += lineFirstPayment(d.op); break;
+      default: break;   // 贷款/卖厂房/交货是现金流入；下单付料在到货季（引擎侧，已由 estAutoOutlay 覆盖）
+    }
+  }
+  return spend;
+};
+
+/**
+ * 季末现金垫：预算 + 剧本基线垫 + decide 自有支出；贴现取"够到它的最小 7 的倍数"，
+ * 救不回就不动（规格 §9-5 后备顺序第 1 档）。
+ * spent（修 3）：rescueSteps 排在税/广告/首期/加工费之后执行，只看季初 cash 会漏掉
+ * "本季自己发出的步把现金压穿 floor"——floor 必须把这些支出算进来。
+ * 已知不精确的一侧：本季 deliverOrder/sellFactory 新造出的应收池看不见——贴现判据读的是季初
+ * accountsReceivable，交货产生的应收按账期落到四档数组、引擎校验的是总池（store:711-713），
+ * 要预知本季末池子就得重算四档、开始复制引擎，本轮裁定不做。后果是某季可能少救一次，
+ * 由 nextQuarter 的透支门（store:2781-2786）兜住、runner 停下报缺口。
+ */
+export const rescueSteps = (s: EnterpriseState, intent: YearIntent, spent: number): DemoStep[] => {
+  const floor = estAutoOutlay(s) + intent.cashPad + spent;
   if (s.finance.cash >= floor) return [];
   const totalAR = s.finance.accountsReceivable.reduce((sum, v) => sum + v, 0);
   const max = Math.floor(totalAR / DISCOUNT_UNIT) * DISCOUNT_UNIT;
@@ -256,7 +318,11 @@ export const decideQuarter = (s: EnterpriseState, intent: YearIntent): DemoStep[
   const steps: DemoStep[] = [];
 
   if (quarter === 1) steps.push(...yearStartSteps(s, intent));
-  if (intent.shortLoanQuarters.includes(quarter)) steps.push({ stepId: 'q-3', op: { kind: 'applyShortTermLoan' } });
+  // 修 7：引擎只放行第 1、3 季放贷（store:650-652），intent 越界时排了也必撞门，决策层自己拦。
+  // 比把 YearIntent.shortLoanQuarters 收成 (1|3)[] 更省——types.ts 本轮不动。
+  if ((quarter === 1 || quarter === 3) && intent.shortLoanQuarters.includes(quarter)) {
+    steps.push({ stepId: 'q-3', op: { kind: 'applyShortTermLoan' } });
+  }
   steps.push(...materialSteps(s));
   steps.push(...productionSteps(s, intent));
   steps.push(...deliverySteps(s));
@@ -264,7 +330,9 @@ export const decideQuarter = (s: EnterpriseState, intent: YearIntent): DemoStep[
     steps.push({ stepId: 'q-15', op: { kind: 'investProductR_D' } });
   }
   if (quarter === 4) steps.push(...yearEndSteps(s, intent));
-  steps.push(...rescueSteps(s, intent));
+  // 修 3：贴现判据要吃进 decide 自己刚排出去的手动支出——季初 cash ≥ 只含引擎自扣项的下界，
+  // 不代表走完税/广告/上线首期/加工费之后还在下界之上（规格 §4.5 硬不变式管的就是产出序列）。
+  steps.push(...rescueSteps(s, intent, ownSpend(steps, s)));
   steps.push({ stepId: 'q-20', op: { kind: 'nextQuarter' } });
 
   return steps;

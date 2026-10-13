@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFreshState } from '../src/store/enterpriseStore';
 import { decideQuarter } from '../src/demo/decide';
+import type { Order } from '../src/types/enterprise';
 import type { YearIntent } from '../src/demo/types';
 
 // demoDecide.test.ts 同款 intent() 夹具。两份都是四行数据，控制者已裁定：宁可重复这四行，
@@ -11,6 +12,16 @@ const intent = (over: Partial<YearIntent> = {}): YearIntent => ({
   year: 1, adAmount: 2, orderCap: 3, newLines: [], rdP2: false,
   marketInvest: [], isoInvest: [], shortLoanQuarters: [], longLoan: false, cashPad: 6, ...over,
 });
+
+// demoDecide.test.ts 同款 order() 夹具（同一裁定：宁可重复几行数据，不抽共享文件）。
+// totalAmount 由 quantity × unitPrice 推导，避免写出引擎产不出来的自相矛盾夹具。
+const order = (over: Partial<Order> = {}): Order => {
+  const base: Order = {
+    id: 'o1', productType: 'P1', quantity: 2, unitPrice: 5, totalAmount: 10,
+    paymentPeriod: 2, market: 'local', isSelected: false, isDelivered: false, ...over,
+  };
+  return { ...base, totalAmount: over.totalAmount ?? base.quantity * base.unitPrice };
+};
 
 describe('整季编排', () => {
   it('第1年第1季的步序：税→广告→订货会→选单→原料→开工→交货→研发→贴现(按需)→推进', () => {
@@ -43,6 +54,45 @@ describe('整季编排', () => {
     s.finance.accountsReceivable = [0, 0, 0, 28];
     const kinds = decideQuarter(s, intent({ cashPad: 12 })).map((d) => d.op.kind);
     expect(kinds).toContain('discountReceivable');
+  });
+
+  // 修 3 的灵魂用例：rescueSteps 此前只看季初状态，看不见 decide 自己刚排出去的税/广告/加工费。
+  // 季初 cash 7 ≥ 旧下界 6（estAutoOutlay 0 + cashPad 6）→ 旧实现不贴现；
+  // 但本季要交税 1 + 广告 2 + 两条线开工加工费 1×2 = 5，走完就剩 2，压穿下界。
+  // 规格 §4.5 的硬不变式管的是"decide 自己产出的序列不许把现金压到 floor 之下"，这就是决策层缺陷。
+  it('季初 cash 够旧下界、但本季自有支出压穿时必须贴现', () => {
+    const s = createFreshState();
+    s.finance.cash = 7;
+    s.finance.accountsReceivable = [0, 0, 0, 14];
+    s.production.factories[0].productionLines[0].inProgressProducts = 0;   // 腾空闲 → 两条 startProduction
+    s.production.factories[1].productionLines[0].inProgressProducts = 0;   // （开局 R1 3 个，料齐）
+    const kinds = decideQuarter(s, intent({ cashPad: 6 })).map((d) => d.op.kind);
+    expect(kinds).toContain('discountReceivable');
+  });
+
+  // 修 7：引擎只放行第 1、3 季放贷（store:650-652），intent 越界时排了也必撞门，决策层自己拦。
+  it('短贷步只在第1、3季发出，intent 越界也不排', () => {
+    for (const quarter of [1, 3]) {
+      const s = createFreshState();
+      s.operation.currentQuarter = quarter;
+      const kinds = decideQuarter(s, intent({ shortLoanQuarters: [1, 2, 3, 4] })).map((d) => d.op.kind);
+      expect(kinds).toContain('applyShortTermLoan');
+    }
+    for (const quarter of [2, 4]) {
+      const s = createFreshState();
+      s.operation.currentQuarter = quarter;
+      const kinds = decideQuarter(s, intent({ shortLoanQuarters: [1, 2, 3, 4] })).map((d) => d.op.kind);
+      expect(kinds).not.toContain('applyShortTermLoan');
+    }
+  });
+
+  // 修 8：选单必须排在订货会之后（池是 enterOrderMeeting 现场生成的）——此前只在注释里，没有用例钉住。
+  it('选单步排在订货会步之后', () => {
+    const s = createFreshState();   // 开局即第1年第1季
+    s.marketing.availableOrders = [order({ id: 'a', quantity: 1, unitPrice: 6 }), order({ id: 'b', quantity: 1, unitPrice: 5 })];
+    const kinds = decideQuarter(s, intent()).map((d) => d.op.kind);
+    expect(kinds).toContain('selectOrder');   // 防空断言：开局 P1 可承诺 15 件，两张 1 件单必被选中
+    expect(kinds.indexOf('selectOrder')).toBeGreaterThan(kinds.indexOf('enterOrderMeeting'));
   });
 });
 
