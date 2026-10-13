@@ -2,8 +2,10 @@
 // 本仓库测试环境是 node、无 jsdom（存档规格 §7），store 级与纯函数级两套都测不了渲染，这里只测数据。
 import { describe, expect, it } from 'vitest';
 import { createFreshState } from '../src/store/enterpriseStore';
-import type { EnterpriseState, Order, ProductionLine } from '../src/types/enterprise';
-import { commitableUnits, deliverySteps, pickOrders } from '../src/demo/decide';
+import type { EnterpriseState, Order, ProductionLine, RawMaterialOrder } from '../src/types/enterprise';
+import {
+  commitableUnits, deliverySteps, materialSteps, pickOrders, productionSteps, quarterlyMaterialDemand,
+} from '../src/demo/decide';
 import type { YearIntent } from '../src/demo/types';
 
 const intent = (over: Partial<YearIntent> = {}): YearIntent => ({
@@ -141,5 +143,85 @@ describe('交货', () => {
       { kind: 'deliverOrder', orderId: 'first' },
       { kind: 'deliverOrder', orderId: 'fits-rest' },
     ]);
+  });
+});
+
+describe('投料与开工', () => {
+  it('每季投料需求按各线产品 BOM 汇总', () => {
+    const s = createFreshState();   // 两条全自动线都在产 P1（P1 = 1×R1）
+    expect(quarterlyMaterialDemand(s)).toEqual({ R1: 2, R2: 0, R3: 0, R4: 0 });
+  });
+
+  it('R1 提前 1 季到货：缺口 = 需求×(提前期+1) − 在手 − 在途', () => {
+    const s = createFreshState();   // 在手 R1 3 个、无在途、每季需 2 → 覆盖 2 季要 4
+    expect(materialSteps(s)).toEqual([
+      { stepId: 'q-6', op: { kind: 'placeRawMaterialOrder', materialType: 'R1', quantity: 1 } },
+    ]);
+  });
+
+  it('库存够两季以上就不下单', () => {
+    const s = createFreshState();
+    s.logistics.rawMaterials = s.logistics.rawMaterials.map((m) =>
+      m.type === 'R1' ? { ...m, quantity: 9 } : m);
+    expect(materialSteps(s)).toEqual([]);
+  });
+
+  // 在途必须从缺口里扣，否则每季度都会把同一批料再下一遍；且只扣同一种料——R2 的单子填不了 R1 的坑
+  it('在途单抵缺口：同种料抵得掉，别种料抵不掉', () => {
+    const s = createFreshState();   // 缺口 = 2×(1+1) − 3 − 0 = 1
+    const r2Order: RawMaterialOrder = {
+      id: 'rmo-r2', materialType: 'R2', quantity: 1, price: 1, orderPeriod: 1, arrivalPeriod: 2,
+    };
+    s.logistics.rawMaterialOrders.push(r2Order);
+    expect(materialSteps(s)).toEqual([
+      { stepId: 'q-6', op: { kind: 'placeRawMaterialOrder', materialType: 'R1', quantity: 1 } },
+    ]);
+    const r1Order: RawMaterialOrder = { ...r2Order, id: 'rmo-r1', materialType: 'R1' };
+    s.logistics.rawMaterialOrders.push(r1Order);
+    expect(materialSteps(s)).toEqual([]);   // 1 个在途正好抵掉 1 的缺口
+  });
+
+  it('开工只挑料齐且空闲的线', () => {
+    const s = createFreshState();
+    s.logistics.rawMaterials = s.logistics.rawMaterials.map((m) =>
+      m.type === 'R1' ? { ...m, quantity: 1 } : m);
+    // 开局两条线都在生产中（各压 2 件在制品），把线 2 腾空闲着——1 个 R1 只够它开工
+    s.production.factories[1].productionLines[0].inProgressProducts = 0;
+    expect(productionSteps(s, intent())).toEqual([
+      { stepId: 'q-10', op: { kind: 'startProduction', lineId: 'line-2' } },
+    ]);
+  });
+
+  // 开工侧只看 PRODUCIBLE_STATUS 白名单（裁定 1）：料齐与否不是唯一门槛，
+  // installing/converting/maintaining 的线本季不产出，给它们开工只会撞 store 的状态门。
+  it('料齐但状态不在白名单的线不开工，idle 的照开', () => {
+    const s = createFreshState();
+    s.logistics.rawMaterials = s.logistics.rawMaterials.map((m) =>
+      m.type === 'R1' ? { ...m, quantity: 9 } : m);   // 料齐：让状态成为唯一变量
+    s.production.factories[0].productionLines[0].inProgressProducts = 0;
+    s.production.factories[1].productionLines[0].inProgressProducts = 0;
+    s.production.factories[1].productionLines[0].status = 'idle';   // idle 也在白名单里
+    for (const status of ['installing', 'converting', 'maintaining'] as const) {
+      s.production.factories[0].productionLines.push(
+        lineLike(s, { id: `line-${status}`, status, inProgressProducts: 0 }),
+      );
+    }
+    expect(productionSteps(s, intent())).toEqual([
+      { stepId: 'q-10', op: { kind: 'startProduction', lineId: 'line-1' } },
+      { stepId: 'q-10', op: { kind: 'startProduction', lineId: 'line-2' } },
+    ]);
+  });
+
+  it('newLines 每季最多落一条，当年在建数已达上限就不再落', () => {
+    const s = createFreshState();
+    const withPlan = intent({ newLines: [{ factoryId: 'factory-1', lineType: 'automatic', product: 'P1' }] });
+    expect(productionSteps(s, withPlan)[0].op).toEqual({
+      kind: 'addProductionLine', factoryId: 'factory-1', lineType: 'automatic', product: 'P1',
+    });
+    s.production.factories[0].productionLines.push({
+      ...s.production.factories[0].productionLines[0],
+      id: 'line-new-1', status: 'installing', builtInYear: 1, inProgressProducts: 0,
+    });
+    expect(productionSteps(s, withPlan).some((d) => d.stepId === 'q-8')).toBe(false);
   });
 });

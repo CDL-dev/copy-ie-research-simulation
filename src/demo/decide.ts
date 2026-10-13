@@ -1,8 +1,9 @@
 // 意图 + 实时状态 → 动作序列（纯函数，规格 §4.5）。这里不做任何状态写入，也不 import store：
 // 一旦 import store 就没法用 createFreshState() 造状态单测它了。
 import type { EnterpriseState, ProductionLine } from '../types/enterprise';
-// PRODUCT_BOM 本文件暂未消费：materialSteps / productionSteps（Task 4）立刻用它算每件成品要哪些料各几个。
+// PRODUCT_BOM：投料与开工（Task 4）用它算每件成品要哪些料各几个。
 import { PRODUCT_BOM } from '../utils/rules';
+import type { MaterialId } from '../utils/rules';
 import type { DemoStep, PlayableProduct, YearIntent } from './types';
 
 export const linesOf = (s: EnterpriseState) =>
@@ -53,6 +54,97 @@ export const pickOrders = (s: EnterpriseState, intent: YearIntent): string[] => 
     }
   }
   return chosen;
+};
+
+// PRODUCT_BOM 的键类型（P1..P4）；本函数只按已开放的产品取料
+type MaterialProductKey = keyof typeof PRODUCT_BOM;
+
+/**
+ * 每季投料需求（按各线当前产品 BOM 汇总）。
+ * 这里刻意不套 PRODUCIBLE_STATUS：本函数问的是"这些线挂的是什么产品"，不是"它们本季能不能产出"。
+ * installing / converting / maintaining 的线下一季要开工就得提前备料——投料带提前期（materialSteps 的
+ * leadTime + 1）正是为此；把 installing 剔掉，第 2 年新线会一整季没料。
+ * 只有 selling 排除：待售残线不再产出，为它备料是纯浪费。
+ */
+export const quarterlyMaterialDemand = (s: EnterpriseState): Record<MaterialId, number> => {
+  const demand: Record<MaterialId, number> = { R1: 0, R2: 0, R3: 0, R4: 0 };
+  for (const line of linesOf(s)) {
+    if (!line.product || line.status === 'selling') continue;
+    for (const [type, qty] of Object.entries(PRODUCT_BOM[line.product as MaterialProductKey])) {
+      demand[type as MaterialId] += qty ?? 0;
+    }
+  }
+  return demand;
+};
+
+/**
+ * 这条线本年是否"已经投过"（q-8 的分期投资口径）。
+ * 与 PRODUCIBLE_STATUS 是两回事，别混用：本函数问"今年为它掏过钱没有"（installing 当然算掏过），
+ * PRODUCIBLE_STATUS 问"今年它能不能排产"（installing 不算）。
+ * 安装完成的下一季度才可生产（规则弹窗原文），所以本年已投的线不该再投一条，
+ * 否则 orderCap 之外还会多养一条线。
+ */
+const investedThisYear = (l: ProductionLine, currentYear: number): boolean =>
+  l.status === 'installing' || l.builtInYear === currentYear;
+
+/** 下原料订单：到货入库时才付款（store:1516），所以这里只看数量缺口，不看现金 */
+export const materialSteps = (s: EnterpriseState): DemoStep[] => {
+  const demand = quarterlyMaterialDemand(s);
+  const out: DemoStep[] = [];
+  for (const type of ['R1', 'R2', 'R3', 'R4'] as MaterialId[]) {
+    const need = demand[type];
+    if (need <= 0) continue;
+    const material = s.logistics.rawMaterials.find((m) => m.type === type);
+    const leadTime = material?.leadTime ?? 1;
+    const onHand = material?.quantity ?? 0;
+    // 在途只算同一种原料：R2 的单子填不了 R3 的坑
+    const pending = s.logistics.rawMaterialOrders
+      .filter((o) => o.materialType === type)
+      .reduce((sum, o) => sum + o.quantity, 0);
+    const shortfall = need * (leadTime + 1) - onHand - pending;
+    if (shortfall > 0) {
+      out.push({ stepId: 'q-6', op: { kind: 'placeRawMaterialOrder', materialType: type, quantity: shortfall } });
+    }
+  }
+  return out;
+};
+
+/**
+ * q-8 上新线（本年最多落一条）+ q-10 开工。
+ * 开工侧只看 PRODUCIBLE_STATUS 白名单：installing / converting / maintaining / selling 的线本季开不了工。
+ */
+export const productionSteps = (s: EnterpriseState, intent: YearIntent): DemoStep[] => {
+  const out: DemoStep[] = [];
+  for (const plan of intent.newLines) {
+    const factory = s.production.factories.find((f) => f.id === plan.factoryId);
+    if (!factory || factory.productionLines.length >= factory.capacity) continue;
+    const wanted = intent.newLines.filter((p) => p.factoryId === plan.factoryId).length;
+    const alreadyInvested = factory.productionLines.filter(
+      (l) => investedThisYear(l, s.operation.currentYear),
+    ).length;
+    if (alreadyInvested < wanted) {
+      out.push({
+        stepId: 'q-8',
+        op: { kind: 'addProductionLine', factoryId: plan.factoryId, lineType: plan.lineType, product: plan.product },
+      });
+      break;   // 每季最多落一条：分期投资要占现金，一季落两条会撞加工费/首期门
+    }
+  }
+
+  for (const line of linesOf(s)) {
+    if (!line.product || line.inProgressProducts > 0) continue;
+    if (!PRODUCIBLE_STATUS.has(line.status)) continue;
+    const product = line.product as PlayableProduct;
+    if (product !== 'P1' && product !== 'P2') continue;
+    // 料齐判定只看"这一条线需要的量"，不看两条线争同一个料——真争抢时第二条线会撞
+    // store 的"原材料不足"门，runner 当场停得下来说得清；在决策层提前复算库存分配是多一套会漂的规则。
+    const stocked = Object.entries(PRODUCT_BOM[product]).every(
+      ([type, qty]) =>
+        (s.logistics.rawMaterials.find((m) => m.type === type)?.quantity ?? 0) >= (qty ?? 0),
+    );
+    if (stocked) out.push({ stepId: 'q-10', op: { kind: 'startProduction', lineId: line.id } });
+  }
+  return out;
 };
 
 /**
