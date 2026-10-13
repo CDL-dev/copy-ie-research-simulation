@@ -205,8 +205,18 @@ describe('演示剧本引用的都是真实存在的东西（演示模式规格 
     // Task 7 第一次真跑把前提推翻了：`productionLineLimits.automatic = 2`（store:51-56）而开局
     // 两条全自动线已在（line-1/line-2），配额从第 1 年起就是 0 剩——声明 automatic 只会撞
     // store:925-932 的静默空操作，整局在第 2 年第 1 季停住。
-    // 折算失真是保守侧（`quarterlyMaterialDemand` 用 Math.ceil 宁多不少），不是错；
-    // 真错的是"这条线根本建不出来"。所以守卫换成按开局状态查配额。
+    // 「折算失真」那一半当时说得不准，按实情更正（Task 7 审查修 8）：两处折算**方向相反**，
+    // 都不是"错"，但绝不是"都偏保守侧"——
+    // ① 备料侧 `quarterlyMaterialDemand`（decide.ts:90-95）用 Math.ceil：半自动线每季记 1 套料，
+    //    而引擎每两季才吃一套 → 多买约一季的料、多压几 M 现金，这半边才是保守侧。
+    // ② 产能侧 `commitableUnits`（decide.ts:36-39）用 `inProgressProducts + Math.floor(quartersLeft / period)`
+    //    滚动折算，而引擎按 `line.type` + **日历季奇偶**出货（store:2458-2467，半自动是 `shouldComplete = newQuarter % 2 === 0`，
+    //    `newQuarter` 是年内季度号 :2176，所以一条半自动线每年只在进入第 2、第 4 季时入库，最多 2 件）：
+    //    实测（本局采用剧本）该线在第 3 年年初被 decide 记 **3 件**（在制品 1 + floor(4/2)=2），引擎本年只入库 **2 件**，
+    //    多承诺 1 件/线/年，选单因此**虚高**——这正是规格 §10 条 11「终局剩 2 张单 / 6 件交不出」的来源之一，不是保守侧。
+    //    （第 2 年年初它还是 `installing`，被 PRODUCIBLE_STATUS 白名单记 0，虚高从第 3 年起发作。）
+    // 结论不变：真错的是"这条线根本建不出来"，所以守卫换成按开局状态查配额。
+    // ② 的折算不同构要修得动 Task 3 的已审实现（commitableUnits），本期不修，已记进规格 §10 条 14。
     const fresh = createFreshState();
     const used = fresh.production.factories.flatMap((f) => f.productionLines);
     ([1, 2, 3, 4] as const).forEach((y) => {

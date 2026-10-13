@@ -1,5 +1,10 @@
 // 演示驱动层（规格 §4.6）：它是唯一 import store 的 demo 模块。决策在 decide.ts、剧本在 script.ts，
 // 这里只做三件事——把动作描述符映射到真实 action、按步进播放、撞门就停下来说清楚。
+//
+// 面板（Task 8 的 DemoPanel）读这两个字段的分工是**固定的**，别混用：
+// - **讲解卡读 `lastStep`**（刚成功执行的那一步，它的 rule/label 就是屏幕上该念的那条规则原文，规格 §4.7）；
+//   读 `queue[0]` 会错一格——讲解点自动停的时候，`queue[0]` 已经是"下一步"了。
+// - **进度读 `queue.length`**（本季还剩几步）；年季读数直接取 store 的 `operation`。
 import { create } from 'zustand';
 import { useEnterpriseStore } from '../store/enterpriseStore';
 import { CONTROL_STEPS } from '../utils/controlTable';
@@ -145,12 +150,16 @@ const advanceOne = (): { ok: boolean } => {
 
   // 就地 add 而不是 `new Set([...seen, x])`：tsconfig target 是 es5，展开 Set 要 downlevelIteration。
   // 这个集合是模块级私有、不进 zustand，所以不存在"外部握着旧引用看到突变"的暴露面。
+  // **次序是承重的**（本行必须排在下面补选那一段之前）：先登记这个讲解点，`selectStepsAfterMeeting()`
+  // 里 decorate 出来的同 stepId（b-2）选单步才会被判成非讲解点。反过来写，b-2 会在同一季被触发第二次暂停。
   if (head.isPausePoint) seenPausePoints.add(head.stepId);
 
   // 订货会刚把池子生成出来 → 现场补一轮选单，插在剩余步之前（详见 selectStepsAfterMeeting）
   const freshPicks = head.op.kind === 'enterOrderMeeting' ? selectStepsAfterMeeting() : [];
-  // 季初展开里那批（对空池算出来的）选单步一律作废，以现场这轮为准；没有补选时原样保留
-  const remaining = freshPicks.length > 0
+  // 季初那批 selectOrder 步**一律作废**（与补选是否挑到单无关）：enterOrderMeeting 每次整替订单池
+  // （store:1791），季初对着旧池算出来的 id 在这一刻之后必然失效。留着它们，补选为空的年份
+  // （池子只剩产能为 0 的产品、或广告额 0 → unlocked 0）就会撞 store:2029「该订单不在可选列表中」当场 blocked。
+  const remaining = head.op.kind === 'enterOrderMeeting'
     ? rest.filter((s) => s.op.kind !== 'selectOrder')
     : rest;
 
@@ -160,27 +169,36 @@ const advanceOne = (): { ok: boolean } => {
   const nextQueue = head.op.kind === 'nextQuarter' || remaining.length === 0 ? expand() : [...freshPicks, ...remaining];
 
   if (finishedGame) {
-    useDemoRunner.setState({ queue: [], phase: 'finished', blocked: null });
+    useDemoRunner.setState({ queue: [], phase: 'finished', blocked: null, lastStep: head });
     return { ok: true };
   }
+  // 相位：讲解点自动停；被拒后重试成功也要从 blocked 拉回 paused（blocked 字段已经在下面清了，
+  // 相位不动的话面板显示"被拒但报错区已空"，而 skipQuarter 见 blocked 就早退、前进不了也退回播放）。
+  const cur = useDemoRunner.getState().phase;
   useDemoRunner.setState({
     queue: nextQueue,
     blocked: null,
-    phase: head.isPausePoint ? 'paused' : useDemoRunner.getState().phase,
+    lastStep: head,
+    phase: head.isPausePoint || cur === 'blocked' ? 'paused' : cur,
   });
   return { ok: true };
 };
 
 // 规格 §4.6 的下限。Task 7 真跑给它加了第二个理由：`Date.now()` 不只进日志，还进**业务主键**
-// （订货会订单 id = `order-${Date.now()}-${i}`，store:1748），同毫秒的两次订货会会撞出同 id 的两张单，
-// 交货时一次标记两张却只扣一张的库存与应收。所以 300ms 不是"看得清"，是"数据不错"——
-// 任何绕过 UI 的批量驱动（包括 tests/demoRun.test.ts 的同步连推）都必须自己保证每次操作落在不同毫秒。
+// （订货会订单 id = `order-${Date.now()}-${i}`，store:1748；原料单 id 原来是 `order-${Date.now()}`、
+// 不带序号，store:1542），同毫秒的两次订货会会撞出同 id 的两张单，交货时一次标记两张却只扣一张的库存与应收。
+// **但这条下限只管得到 `play()`**：`step()` 与 `skipQuarter()` 是同步批量，一次调用就把整季的步走完，
+// 相邻两步常常落在同一个毫秒，下限根本拦不住它们。同毫秒碰撞的正解是让 id 带序号（原料单已在 store 侧修掉），
+// 不是靠时间间隔；测试里则显式装时钟（见 tests/demoRun.test.ts 的 withStepClock / withFrozenClock）。
+// 所以 300ms 的本来含义保留：它是**播放**时避开核对盲区（§3）的最小值，不是手感参数。
 const MIN_SPEED_MS = 300;
 
 interface DemoRunner {
   phase: RunnerPhase;
   queue: RunningStep[];
   blocked: BlockedInfo | null;
+  /** 刚成功执行的那一步（讲解卡的数据源；start/restart/exit 清空，见文件头分工说明） */
+  lastStep: RunningStep | null;
   speedMs: number;
   start: () => void;
   step: () => void;
@@ -199,13 +217,14 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   phase: 'idle',
   queue: [],
   blocked: null,
+  lastStep: null,
   speedMs: 600,
 
   // 进入演示：换到内存里的全新开局态（store 侧 enterDemo 已拍好快照），展开第一季
   start: () => {
     useEnterpriseStore.getState().enterDemo();
     seenPausePoints = new Set<string>();
-    set({ phase: 'paused', queue: expand(), blocked: null });
+    set({ phase: 'paused', queue: expand(), blocked: null, lastStep: null });
   },
 
   step: () => { advanceOne(); },
@@ -229,6 +248,10 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   // 但剧本万一在某季产出了空队列，没有这道闸这个 while 就转不完。
   skipQuarter: () => {
     clearTimer();
+    // 先落回 paused 再跑循环：这是**同步批量**，没有 play() 的 300ms timer 在背后驱动。
+    // 从 playing 进来却只在末尾留着 playing 的话，面板显示"播放中"，而 play() 首行的
+    // `phase === 'playing'` 早退会让它一步都走不动。循环内部再按需转 blocked/finished。
+    set({ phase: 'paused' });
     const startAbs = absQuarter(
       useEnterpriseStore.getState().state.operation.currentYear,
       useEnterpriseStore.getState().state.operation.currentQuarter,
@@ -242,9 +265,21 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
     }
   },
 
-  restart: () => { clearTimer(); get().start(); },
+  // 重新开始 = 先退出演示（把老师的当前屏换回来）再重进（拍新快照、换一份开局态）。
+  // 不能只调 start()：enterDemo 在 demoMode 为 true 时是幂等早退（store:551，Task 1 有测试钉着它），
+  // 只调 start 会对"当前半年季"重跑 decideQuarter——二次扣广告、整替订单池、可能二次借短贷，
+  // 那正是 advanceOne 空队列分支里写的"数据损坏而不是停住"。
+  restart: () => {
+    clearTimer();
+    useEnterpriseStore.getState().exitDemo();
+    get().start();
+  },
 
-  exit: () => { clearTimer(); useEnterpriseStore.getState().exitDemo(); set({ phase: 'idle', queue: [], blocked: null }); },
+  exit: () => {
+    clearTimer();
+    useEnterpriseStore.getState().exitDemo();
+    set({ phase: 'idle', queue: [], blocked: null, lastStep: null });
+  },
 
   setSpeed: (ms) => set({ speedMs: Math.max(MIN_SPEED_MS, ms) }),
 }));
