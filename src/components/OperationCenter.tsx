@@ -619,6 +619,15 @@ const YearlyExportButtons: React.FC<{
   financialLogs: FinancialLogRecord[];
   currentYear: number;
 }> = ({ allSaveFiles, financialLogs, currentYear }) => {
+  // 最终审查修复波（必修 1）：演示期禁用本颗按钮。理由是**这份产物有两列根本不读演示局**——
+  // `buildYearControlTable` 的 q-1「季初现金盘点」与 q-20「本季结余」优先取存档帧（utils/controlTable.ts:54
+  // 的 `quarterStartSnapshot` 与 :133 的 `snapshotCash`），帧列表来自本组件 :1038；修复前那句是无条件的
+  // `getSaveFiles()`，而演示局没有帧、(年,季) 又与老师真实局的帧同号 ⇒ CSV 那两列是**老师上一局同年季的数**、
+  // 其余 28 行是演示局的账——一份混两份账的文件，比"这个按钮现在不能用"更糟。存档包同形（`SaveLoadPanel.tsx`）。
+  // 复审后续波把 :1038 改成演示期喂 `[]`（页面 q-1/q-10 由此不再混帧），本颗按钮**照旧禁用**：无帧只让 CSV 的
+  // q-1 改走 controlTable.ts:109 的盘点日志回退，那个口径不扣短贷本息与应付归还，印出来仍是错数。
+  // 根治＝把取数源换成内存态（新架构，本期不做）或页面与 CSV 单源重构（roadmap §5.2）——规格 §10 条 20。
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
   const handleExportYear = (year: number) => {
     const table = buildYearControlTable(year, financialLogs, allSaveFiles);
     const csvContent = toCSV(table, year);
@@ -644,9 +653,10 @@ const YearlyExportButtons: React.FC<{
           <button
             key={year}
             onClick={() => handleExportYear(year)}
-            disabled={!hasData}
+            disabled={!hasData || demoMode}
+            title={demoMode ? '课堂演示中不可用：本表的季初盘点与本季结余两列取自本机存档帧，演示局没有帧，导出会把上一局的数混进来' : hasData ? `导出第${year}年运行控制表（CSV）` : '该年度尚无运营记录'}
             className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center space-x-1 ${
-              hasData
+              hasData && !demoMode
                 ? 'bg-blue-600 text-white hover:bg-blue-700'
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
@@ -1020,9 +1030,12 @@ const OperationControlTable: React.FC<{
 const OperationCenter: React.FC = () => {
   const { state, nextQuarter, getSaveFiles, registerOtherCashFlow } = useEnterpriseStore();
   const { operation, production, logistics } = state;
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
 
-  // 获取所有存档
-  const allSaveFiles = getSaveFiles();
+  // 演示局没有存档帧，而它的 (年,季) 与老师真实局的帧必然同号：喂进去就会在 q-1 与 q-10 两格印出上一局的数。
+  // 空数组让这两格各自退回内存态取数（q-1 走 cashFlowHistory，q-10 走空白线分支），非演示态逐字节不变。
+  // 这层护栏与 :622-629 那段导出禁用说明同族（规格 §4.8 第 2 闸）；根治法是页面与 CSV 单源（roadmap §5.2），届时删掉本处三元即可。
+  const allSaveFiles = demoMode ? [] : getSaveFiles();
 
   return (
     <div className="space-y-6">

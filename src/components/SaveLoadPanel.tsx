@@ -23,9 +23,9 @@ import { digestFrame } from '../utils/saveDigest';
 export { digestSkipNote, isComparableDigest };
 
 // 下载：Blob → createObjectURL → appendChild → click → removeChild → revokeObjectURL
-// （仓库既有写法，见 OperationCenter.tsx:471-485 的日志导出与 :625-633 的控制表导出）。
+// （仓库既有写法，见 OperationCenter.tsx:471-485 的日志导出与 :634-642 的控制表导出）。
 // 三处产物共用这一条：存档包 .json、核对报告 .txt / .json。
-// BOM 只有 CSV 加（Windows Excel 认中文，OperationCenter.tsx:625），这里两类产物都**不加**——
+// BOM 只有 CSV 加（Windows Excel 认中文，OperationCenter.tsx:634），这里两类产物都**不加**——
 // BOM 会让 JSON.parse 与 python json.loads 当场报错（规格 §4.2），.txt 加了也会在 diff 里多一个隐形字符。
 const downloadFile = (fileName: string, content: string, mime: string): void => {
   const blob = new Blob([content], { type: `${mime};charset=utf-8` });
@@ -79,6 +79,22 @@ const SaveLoadPanel: React.FC = () => {
   const fileInput = useRef<HTMLInputElement | null>(null);
   // 暂停期间两个写动作禁用（规格 §7.10：导出/读文件/预览是只读，照常可用）
   const isPaused = state.isPaused;
+  // 课堂演示闸门（规格 §4.8 第 2 闸 + Task 7 审查补的两处）：演示态下本面板不允许任何动作
+  // 写 localStorage 或换掉当前屏——
+  // ①②③ saveGame / importSaveFiles / applyImportedState 三个落库动作按 §4.8 就归 UI 层禁（store 无 demoMode 闸）；
+  // ④ handleDeleteSave 删帧是**第四条** setItem('enterpriseSaveFiles') 路径，完全不经 store 动作，store 层拦不住；
+  // ⑤ 「加载」走 store 的 loadGame（enterpriseStore.ts:468），它没有 demoMode 闸——演示中载入一份进度，
+  //    之后「重新开始」/「退出演示」的 exitDemo() 会用进演示前那一屏把它静默顶掉；
+  // ⑥ 「重置游戏」的唯一承重理由：resetGame 的 `resetCount++` 打在**模块级变量**上（enterpriseStore.ts:8 的
+  //    `let resetCount`，:570），而 enterDemo/exitDemo 只快照 `state`、不含这个计数器——演示中重置一次，
+  //    退出演示后顶部「重置次数」就虚增一格，此后每帧的名字与逐帧指纹作用域（都含 resetCount）跟着带上这个虚数。
+  //    （原先这里还挂着两条理由，Task 8 审查判为失实、已删：`resetGame` 根本不碰 runner 的队列，
+  //     而"演示中换掉当前屏"本就是演示沙盒的本意，把它们写在这儿等于给下一个人扩大禁用面的借口。）
+  // 导出类动作里，只有「导出存档包」在演示期禁用（必修 1 的处置）：它导的 `saves` 来自 `getSaveFiles()`
+  // 当场读 localStorage，演示局没有帧，包会变成"current 是演示局 + saves 是老师的真实帧"的混账产物。
+  // 仍然可用的只读动作：核对报告 txt/json（数据源＝导入预览里那份包，不读本机帧）、导入预览、
+  // 「取消」、存档列表的只读展示。规格 §4.8 第 2 闸与 §10 条 20 记的是同一件事。
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
 
   // 加载本地存档
   useEffect(() => {
@@ -93,7 +109,8 @@ const SaveLoadPanel: React.FC = () => {
     setLocalSaveFiles(getSaveFiles());
   };
 
-  // 导出存档包：只读动作，暂停态照常可用（规格 §7.10）——它只下载文件，不碰任何状态
+  // 导出存档包：暂停态照常可用（规格 §7.10）——它只下载文件，不碰任何状态；
+  // 但**演示期禁用**（必修 1）：包里 `saves` 取自 `getSaveFiles()`，演示局没有帧，那部分只能是老师的旧账。
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -284,15 +301,21 @@ const SaveLoadPanel: React.FC = () => {
           <div className="flex flex-wrap gap-2 mb-4">
             <button
               onClick={handleManualSave}
-              className="flex-1 bg-green-600 text-white px-3 py-2 rounded-md hover:bg-green-700 transition-colors"
+              disabled={demoMode}
+              title={demoMode ? '课堂演示中不写本机存档列表，退出演示即恢复原进度' : '保存当前状态'}
+              className="flex-1 bg-green-600 text-white px-3 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               手动存档
             </button>
             {/* 导出放在两个安全动作之间，重置游戏仍留在最右——破坏性按钮不夹在中间 */}
+            {/* 最终审查修复波（必修 1）：演示期禁用「导出存档包」——`buildSavePackage(state, getSaveFiles())`
+                导出的包里 `current` 是演示局、`saves` 是本机历史帧（老师的上一局），两份账会混在一个包里；
+                与 OperationCenter 那颗「导出运行控制表」同一形、同一处置。核对报告 txt/json 不受影响
+                （它们的数据源是导入预览里那份**包本身**与当场算出的结论，从不读本机帧，见上面 handleExportReport）。 */}
             <button
               onClick={handleExport}
-              disabled={exporting}
-              title="下载含全部历史快照与指纹的 JSON 文件，可在其它浏览器导入"
+              disabled={exporting || demoMode}
+              title={demoMode ? '课堂演示中不可用：导出的包里 current 是演示局、saves 是本机历史帧，两份账会混在一个包里' : '下载含全部历史快照与指纹的 JSON 文件，可在其它浏览器导入'}
               className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
             >
               {exporting ? '导出中…' : '导出存档包'}
@@ -315,7 +338,9 @@ const SaveLoadPanel: React.FC = () => {
             </button>
             <button
               onClick={handleResetGame}
-              className="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 transition-colors"
+              disabled={demoMode}
+              title={demoMode ? '课堂演示中不可用：它的重置次数记在模块级计数器上，退出演示恢复快照也带不回来，之后每帧读数与指纹都带上虚增的那一格' : '重置当前进度'}
+              className="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               重置游戏
             </button>
@@ -420,16 +445,16 @@ const SaveLoadPanel: React.FC = () => {
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleImportToList}
-                  disabled={isPaused}
-                  title={isPaused ? '运营已暂停，请先继续运营再导入' : '同 id 冲突时改名追加，原有存档不变'}
+                  disabled={isPaused || demoMode}
+                  title={demoMode ? '课堂演示中不写本机存档列表，退出演示即恢复原进度' : isPaused ? '运营已暂停，请先继续运营再导入' : '同 id 冲突时改名追加，原有存档不变'}
                   className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md text-sm hover:bg-blue-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
                   仅加入存档列表
                 </button>
                 <button
                   onClick={handleApplyToCurrent}
-                  disabled={isPaused}
-                  title={isPaused ? '运营已暂停，请先继续运营再导入' : '只替换当前屏，不自动写入存档列表'}
+                  disabled={isPaused || demoMode}
+                  title={demoMode ? '课堂演示中不替换当前屏，退出演示即恢复原进度' : isPaused ? '运营已暂停，请先继续运营再导入' : '只替换当前屏，不自动写入存档列表'}
                   className="flex-1 bg-indigo-600 text-white px-3 py-2 rounded-md text-sm hover:bg-indigo-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
                   设为当前进度
@@ -470,13 +495,17 @@ const SaveLoadPanel: React.FC = () => {
                     <div className="flex gap-1">
                       <button
                         onClick={() => handleLoadSave(saveFile)}
-                        className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
+                        disabled={demoMode}
+                        title={demoMode ? '课堂演示中不载入存档：载入的屏会在退出/重开演示时被进演示前的进度静默顶掉' : '载入这个存档'}
+                        className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         加载
                       </button>
                       <button
                         onClick={() => handleDeleteSave(saveFile.id)}
-                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                        disabled={demoMode}
+                        title={demoMode ? '课堂演示中不删本机存档：这一动作直接重写 localStorage，不经任何 store 闸门' : '删除这个存档'}
+                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         删除
                       </button>

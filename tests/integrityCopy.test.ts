@@ -8,7 +8,14 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { INTEGRITY_BOUNDARY, INTEGRITY_CAVEATS, CAUSE_TEXT } from '../src/utils/audit';
 import { SAVE_FORMAT_VERSION } from '../src/types/enterprise';
-import { RULE_SECTIONS } from '../src/components/RulesModal';
+import { RULE_SECTIONS, ruleTextFor } from '../src/components/RulesModal';
+// Task 6：剧本是纯数据，它对规则弹窗与运行控制表的引用是**跨文件的位置型键**，
+// 这三份数据各改各的都不会有编译错——只有这里的守卫能让它当场变红。
+// ruleTextFor 已在上面那行引入，ESM 下同名绑定重复声明直接报错，不再写第二遍。
+import { PAUSE_POINTS, YEAR_INTENTS } from '../src/demo/script';
+// 剧本的新线要对着**开局状态**查配额（生产线类型余量），所以这里引入状态工厂而非读源码文本
+import { createFreshState } from '../src/store/enterpriseStore';
+import { CONTROL_STEPS } from '../src/utils/controlTable';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 // 文档里的操作路径按 markdown 习惯给每段加反引号，比对"路径是否真写了这两级"时先把反引号剥掉，
@@ -18,6 +25,15 @@ const panelSrc = readFileSync(new URL('../src/components/SaveLoadPanel.tsx', imp
 const modalSrc = readFileSync(new URL('../src/components/RulesModal.tsx', import.meta.url), 'utf8');
 const storeSrc = readFileSync(new URL('../src/store/enterpriseStore.ts', import.meta.url), 'utf8');
 const auditSrc = readFileSync(new URL('../src/utils/audit.ts', import.meta.url), 'utf8');
+// Task 8：演示抽屉与主界面的"界面说法"守卫（规格 §6 第 4 组）。
+// readFileSync 沿用上面 panelSrc 的顶部写法，用例里不重复 import；saveLoadSrc 与 panelSrc 是同一个文件，
+// 起个别名只为让下面那组断言的意图直读（"存档面板挂了 demoMode 禁用"），避免两份读盘。
+const saveLoadSrc = panelSrc;
+const pageSrc = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+const demoPanelSrc = readFileSync(new URL('../src/components/DemoPanel.tsx', import.meta.url), 'utf8');
+// 最终审查修复波（必修 1）：「导出运行控制表」那颗按钮住在 OperationCenter 里，
+// 下面那组邻近性断言要读它的源码文本（与 saveLoadSrc 同一套办法，不渲染组件）。
+const operationCenterSrc = readFileSync(new URL('../src/components/OperationCenter.tsx', import.meta.url), 'utf8');
 
 const SAVE_SECTION = '存档与完整性校验';
 const sectionItems = (): string[] => {
@@ -122,5 +138,199 @@ describe('面板接线：跨度取审计侧的 packageSpan，报告导出有失�
     expect(src).toContain('error.message');
     expect(src).not.toContain('error.name');
     expect(src).toContain('downloadFile(');
+  });
+});
+
+describe('规则条目可被讲解点稳定引用（演示模式规格 §4.3）', () => {
+  it('每个 section 有非空唯一 id，且节顺序与标题不变', () => {
+    const ids = RULE_SECTIONS.map((s) => s.id);
+    expect(RULE_SECTIONS).toHaveLength(10);
+    expect(new Set(ids).size).toBe(ids.length);
+    ids.forEach((id) => expect(id).toBeTruthy());
+    // id 的取值与顺序必须逐字钉死：只钉唯一性的话，把 finance 和 save 互换测试全绿，
+    // 但 ruleTextFor({section:'finance'}) 会静默印出另一节的原文（规格 §4.3）。
+    // 与下面的 title 数组断言配对，同时钉死 id 顺序与 id↔title 对应关系。
+    expect(ids).toEqual([
+      'ad', 'market', 'orders', 'factory', 'production',
+      'rd-iso', 'finance', 'save', 'cost', 'time',
+    ]);
+    expect(RULE_SECTIONS.map((s) => s.title)).toEqual([
+      '广告投放规则（本系统修改项）', '市场开发与准入', '销售会议与订单争取', '厂房与生产线',
+      '采购与生产', '产品研发与ISO认证', '融资与资金管理', '存档与完整性校验',
+      '费用、折旧与税金', '运营时间',
+    ]);
+  });
+
+  it('ruleTextFor 取到原文，越界返回 null 而不是崩或印 undefined', () => {
+    expect(ruleTextFor({ section: 'ad', item: 0 })).toBe(RULE_SECTIONS[0].items[0]);
+    expect(ruleTextFor({ section: 'ad', item: -1 })).toBeNull();
+    expect(ruleTextFor({ section: 'ad', item: 999 })).toBeNull();
+    expect(ruleTextFor({ section: 'nope', item: 0 })).toBeNull();
+  });
+});
+
+// ══ 演示剧本引用的键必须真实存在（Task 6，规格 §4.3/§4.4）═══════════════════════
+describe('演示剧本引用的都是真实存在的东西（演示模式规格 §4.3/§4.4）', () => {
+  it('讲解点的 stepId 两两不同（重复的第二条经 pausePointFor 永不可达）', () => {
+    // pausePointFor 用 find：若表里混进同 stepId 的两条，第二条静默失效——面板停不下、也不报错。
+    // 这条断言就是 script.ts 注释里那句"自己数一遍"的替代网（Task 7 补）。
+    const ids = PAUSE_POINTS.map((p) => p.stepId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('每个讲解点的 stepId 都在 CONTROL_STEPS 里', () => {
+    const ids = new Set(CONTROL_STEPS.map((s) => s.id));
+    PAUSE_POINTS.forEach((p) => expect(ids.has(p.stepId)).toBe(true));
+  });
+
+  it('每个讲解点取回的原文含该步该有的关键词（只断非 null 会放行"指对节、指错条目"）', () => {
+    // 关键词是从 RULE_SECTIONS 的实际文字里挑出来的独词，不是随便一个高频字
+    const KEYWORD: Record<string, string> = {
+      'b-4': '所得税', 'q-17': '解锁', 'b-2': '订单池', 'q-3': '短期贷款',
+      'q-6': '提前', 'q-10': '加工费', 'q-8': '安装', 'q-14': '账期',
+      'q-11': '贴现', 'q-15': 'P2', 'e-1': '长期贷款', 'e-5': '市场开拓投资',
+    };
+    PAUSE_POINTS.forEach((p) => {
+      const text = ruleTextFor(p.rule);
+      expect(text).not.toBeNull();
+      // 失败时打印的是 received 整条原文，配合上一行的 not.toBeNull 足以定位到哪一步指错了条目
+      expect(text).toContain(KEYWORD[p.stepId]);
+    });
+  });
+
+  it('四年意图齐备且金额非负、市场投资含本地维持', () => {
+    ([1, 2, 3, 4] as const).forEach((y) => {
+      const it = YEAR_INTENTS[y];
+      expect(it.year).toBe(y);
+      expect(it.adAmount).toBeGreaterThan(0);
+      expect(it.cashPad).toBeGreaterThan(0);
+    });
+    // 已准入市场每年投 1M 维持，否则丧失准入（store:2798 第2年起判）
+    ([2, 3, 4] as const).forEach((y) => expect(YEAR_INTENTS[y].marketInvest).toContain('local'));
+  });
+
+  it('剧本声明的新线在引擎配额内真建得出来（Task 7 实测校正）', () => {
+    // 原用例断"剧本只声明全自动线"，理由是慢线会让产能/投料两处折算失真。
+    // Task 7 第一次真跑把前提推翻了：`productionLineLimits.automatic = 2`（store:51-56）而开局
+    // 两条全自动线已在（line-1/line-2），配额从第 1 年起就是 0 剩——声明 automatic 只会撞
+    // store:925-932 的静默空操作，整局在第 2 年第 1 季停住。
+    // 「折算失真」那一半当时说得不准，按实情更正（Task 7 审查修 8）：两处折算**方向相反**，
+    // 都不是"错"，但绝不是"都偏保守侧"——
+    // ① 备料侧 `quarterlyMaterialDemand`（decide.ts:90-95）用 Math.ceil：半自动线每季记 1 套料，
+    //    而引擎每两季才吃一套 → 多买约一季的料、多压几 M 现金，这半边才是保守侧。
+    // ② 产能侧 `commitableUnits`（decide.ts:36-39）用 `inProgressProducts + Math.floor(quartersLeft / period)`
+    //    滚动折算，而引擎按 `line.type` + **日历季奇偶**出货（store:2458-2467，半自动是 `shouldComplete = newQuarter % 2 === 0`，
+    //    `newQuarter` 是年内季度号 :2176，所以一条半自动线每年只在进入第 2、第 4 季时入库，最多 2 件）：
+    //    实测（本局采用剧本）该线在第 3 年年初被 decide 记 **3 件**（在制品 1 + floor(4/2)=2），引擎本年只入库 **2 件**，
+    //    多承诺 1 件/线/年，选单因此**虚高**——这正是规格 §10 条 11「终局剩 2 张单 / 6 件交不出」的来源之一，不是保守侧。
+    //    （第 2 年年初它还是 `installing`，被 PRODUCIBLE_STATUS 白名单记 0，虚高从第 3 年起发作。）
+    // 结论不变：真错的是"这条线根本建不出来"，所以守卫换成按开局状态查配额。
+    // ② 的折算不同构要修得动 Task 3 的已审实现（commitableUnits），本期不修，已记进规格 §10 条 14。
+    const fresh = createFreshState();
+    const used = fresh.production.factories.flatMap((f) => f.productionLines);
+    ([1, 2, 3, 4] as const).forEach((y) => {
+      YEAR_INTENTS[y].newLines.forEach((l) => {
+        expect(used.filter((line) => line.type === l.lineType).length)
+          .toBeLessThan(fresh.productionLineLimits[l.lineType]);
+      });
+    });
+  });
+});
+
+// ══ 演示抽屉的界面说法（Task 8，规格 §4.7/§6 第 4 组）═══════════════════════════
+// 与文件开头三组同一套办法：node、无 jsdom，核对的是渲染要用到的源码文本——
+// 挡"README/规格写了界面里根本没有的说法"，行为回归在 demoRun/demoIsolation 那边。
+describe('演示面板的界面说法与 README 一致', () => {
+  // 修 D3（Task 8 审查）：原先写成 `expect(demoPanelSrc + pageSrc).toContain(text)`，拼接让断言失去
+  // 文件归属——「退出演示」只在横幅里出现过也算抽屉那半边过了；而 `'课堂演示'` 是横幅那句
+  // 「课堂演示中 · …」的子串，纯冗余。改成按文件各自断言。
+  it('横幅、按钮、退出提示这些名字真在各自组件里', () => {
+    expect(pageSrc).toContain('课堂演示中 · 全部改动只在内存，退出即恢复');
+    expect(pageSrc).toContain('退出演示');
+    [
+      '课堂演示', '退出演示', '播放', '暂停', '单步', '跳到下一季', '重新开始',
+      '打开规则说明',
+    ].forEach((text) => expect(demoPanelSrc).toContain(text));
+  });
+
+  // 修 A（Task 8 审查）：原先只断 `expect(saveLoadSrc).toContain('demoMode')`，那句注释和 `:91` 的
+  // selector 单独就能满足它——把六处 `disabled={demoMode}` 全删掉也不会红，而 §4.8 第 2 闸是 P0 写盘线
+  // 在 UI 侧的唯一防线，一次"顺手清理 disabled"就能静默破线。改成**逐个 handler 断邻近性**：
+  // onClick 之后 120 个字符内必须出现这道 disabled，删哪一处就红那一条（窗口卡得比下一个按钮近，
+  // 中间隔着 title/className/标签文字/`</button>`，不会因为"文件里别处有 demoMode"而蒙过）。
+  it('演示期间六个会写本机存档或换掉当前屏的按钮各自就近挂着 demoMode 禁用', () => {
+    const GATED_HANDLERS = [
+      'handleManualSave', 'handleResetGame', 'handleLoadSave',
+      'handleDeleteSave', 'handleImportToList', 'handleApplyToCurrent',
+    ];
+    GATED_HANDLERS.forEach((fn) => {
+      expect(saveLoadSrc).toMatch(
+        new RegExp(`onClick=\\{[^{}]*${fn}[^{}]*\\}[\\s\\S]{0,120}?disabled=\\{(?:isPaused \\|\\| )?demoMode\\}`)
+      );
+    });
+    expect(demoPanelSrc).not.toContain('saveGame()');   // 面板自己不落盘
+  });
+
+  // 顶栏那一侧的两道闸同属 §4.8 第 2 闸：「暂停运营」一按就拒绝所有变更操作、直接打死演示；
+  // 「待支付应付税」演示期原本也能点，会和 runner 排在本季第一个的 payTaxes 步抢同一个动作
+  // （那一步随后被判被拒、把 store 原文印进抽屉，审查修 D2）。断法与上面一致：
+  // onClick 之后 160 个字符内的 disabled 表达式里必须真有 demoMode。
+  it('暂停运营与待支付应付税在演示中被置灰（各说得出理由）', () => {
+    expect(pageSrc).toContain('课堂演示期间不可用');
+    expect(pageSrc).toMatch(/onClick=\{payTaxes\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/);
+    // Task 9 收尾：上面那两句各有归属问题——`toContain('课堂演示期间不可用')` 自 page.tsx:60 给
+    // 「待支付应付税」补 title 起就不再唯一属于暂停按钮（删掉 `:77` 的 `disabled={demoMode}` 仍绿），
+    // 而那条 `toMatch` 只管得到 payTaxes。照它的写法给 togglePaused 也补一条邻近性断言。
+    expect(pageSrc).toMatch(/onClick=\{togglePaused\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/);
+  });
+
+  // 同形的两处口子（Task 9 收尾）：财务中心那两颗贷款按钮 dispatch 的是与 runner 同一个 action，
+  // 老师在演示期点一下就把 `q-3`（短贷）/ `e-1`（长贷）那一步**抢跑**掉——不写盘、打死不了演示，
+  // 但读数会变成老师没讲过的形状（多一笔 20M、多一条台账）。判据与「待支付应付税」同一式：
+  // disabled 表达式里必须有 demoMode，且离它自己那颗按钮的 onClick 不超过 160 字符。
+  // 断言方向与上面相反（这两处 JSX 里 disabled 写在 onClick 之前），不是笔误。
+  it('申请长期/短期贷款在演示中被置灰（与待支付应付税同一判据）', () => {
+    expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyLongTermLoan\}/);
+    expect(pageSrc).toMatch(/disabled=\{[^{}]*demoMode[^{}]*\}[\s\S]{0,160}?onClick=\{applyShortTermLoan\}/);
+    [ '申请20M长期贷款', '申请20M短期贷款' ].forEach((text) => expect(pageSrc).toContain(text));
+  });
+
+  // ══ 最终审查修复波（必修 1）：两个「依赖本机存档帧」的导出动作在演示期禁用 ═════════
+  // 整分支审查证实：`buildYearControlTable` 的 q-1 季初盘点与 q-20 本季结余两列取的是 `saves`
+  // （`getSaveFiles()` 当场读 localStorage），而演示局**没有帧**（那是刻意的隔离）——于是导出的
+  // CSV 里那两列是老师上一局同年季的数、其余 28 行是演示局的账：一份混两份账的文件。
+  // `buildSavePackage(state, getSaveFiles())` 同形（current 是演示局、saves 是老师的真实帧）。
+  // 断法与上面那三条一致：邻近性——onClick 之后 160 字符内必须有带 demoMode 的 disabled，
+  // 而不是 `expect(src).toContain('demoMode')` 那种删光闸门也不会红的形状（文件里别处一句注释就能满足它）。
+  it('导出运行控制表在演示中被置灰（它的两列取的是本机存档帧，演示局没有帧）', () => {
+    expect(operationCenterSrc).toMatch(
+      /onClick=\{\(\) => handleExportYear\(year\)\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/
+    );
+    expect(operationCenterSrc).toContain('课堂演示中不可用：本表的季初盘点与本季结余两列取自本机存档帧');
+  });
+
+  it('导出存档包在演示中被置灰（包里的 current 与 saves 是两份账）', () => {
+    expect(saveLoadSrc).toMatch(
+      /onClick=\{handleExport\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/
+    );
+    expect(saveLoadSrc).toContain('课堂演示中不可用：导出的包里 current 是演示局、saves 是本机历史帧');
+  });
+
+  // 复审本波新增的 Important：上面两条只管得住**导出**，页面那 30 行同源的取数没管。
+  // 主组件 `OperationCenter.tsx` 的 `const allSaveFiles = getSaveFiles()` 把本机存档帧喂给整页，
+  // 而演示局的 (年,季) 与老师真实局的帧必然同号 ⇒ q-1「季初现金盘点」（`getQuarterStartInventory`
+  // → `getLatestSaveFile`）与 q-10「开始下一批生产」（`getProductionLineData`）印的是上一局的数。
+  // 修法是最小的一道护栏：演示期不喂帧（空数组），这两格各自退回内存态取数。
+  // 断法与上面同一族：钉**那一句条件表达式本身**（不是 `toContain('demoMode')`——文件里两处注释
+  // 与 YearlyExportButtons 的 selector 早就满足它，删光护栏也不会红），并就近要求它头顶真有 demoMode selector。
+  it('演示期主组件不喂本机存档帧（页面 q-1 与 q-10 两格因此退回内存态取数）', () => {
+    expect(operationCenterSrc).toMatch(
+      /const allSaveFiles = demoMode \? \[\] : getSaveFiles\(\);/
+    );
+    // 主组件那颗 demoMode selector 必须离这句足够近：只有 YearlyExportButtons 里有 selector 的话，
+    // 上面那句拿到的 demoMode 是未声明标识符（tsc 直接红）或被别的绑定遮蔽，护栏是假的。
+    expect(operationCenterSrc).toMatch(
+      /const demoMode = useEnterpriseStore\(\(s\) => s\.demoMode\);[\s\S]{0,300}?const allSaveFiles = demoMode \? \[\] : getSaveFiles\(\);/
+    );
   });
 });

@@ -4,8 +4,8 @@ import { absQuarter, fromAbsQuarter, emptyLedger, settleDueShortLoans, settleLon
 import { MARKET_DEVELOP_YEARS, ISO_REQUIRED_YEARS, generateYearOrders } from '../config/marketDemand';
 import { RESTATED_FULL_NET_FROM_VERSION, kindOfLog, rebuildRestatedChain } from '../utils/restatement';
 
-// 全局状态，用于跟踪重置次数
-let resetCount = 0;
+// 全局状态：resetCount 跟踪重置次数；rawMaterialOrderSeq 给原料订单 id 带序号（:1543，与订货会订单 id 的 `-${i}`（:1748）同一个目的——同一毫秒里的几张单必须有不同主键，否则按 id 取消会把几张一起删掉）。两个计数器并成一条 let 也是刻意的：本文件的行号被规格与测试当证据引用，多一行就全体错位。
+let resetCount = 0, rawMaterialOrderSeq = 0;
 
 // 企业初始状态（严格遵循课程标准，见设计规格第2/3节）：
 // 现金20M + 应收15M + 在制品8M + 成品6M + 原料3M = 流动资产52M；
@@ -366,11 +366,21 @@ export const useEnterpriseStore = create<{
   // 旧档重述串的口径换算必须知道原版本才决定要不要重建，见 migrateState
   // resetCount 可选，取包内最近一帧的（与预览同一处）；不给就沿用本机计数，包里没有历史帧时正是如此
   applyImportedState: (state: EnterpriseState, fromVersion: number, resetCount?: number) => void;
+  // 课堂演示（规格 §4.2）：demoMode 与 demoSnapshot 刻意放在 state **外层**——
+  // saveGame/autoSaveGame 序列化的是 state 整体，逐帧指纹覆盖 {id,timestamp,version,resetCount,state}，
+  // 放进去会污染存档格式（要 bump SAVE_FORMAT_VERSION）并让演示标记进入核对报告与控制表数据源。
+  demoMode: boolean;
+  demoSnapshot: EnterpriseState | null;
+  // 进入：把当前屏拍进内存（不落盘），换一份开局态；退出：原样换回。
+  enterDemo: () => void;
+  exitDemo: () => void;
 }>((set, get) => ({
   state: initialState,
   saveFiles: [],
   resetCount: resetCount,
   validationError: null,
+  demoMode: false,
+  demoSnapshot: null,
 
   setValidationError: (message) => set({ validationError: message }),
 
@@ -423,6 +433,9 @@ export const useEnterpriseStore = create<{
 
   // 自动保存游戏（每季度调用）
   autoSaveGame: () => {
+    // 课堂演示期间自动存档整体停用（规格 §4.8 第 1 闸）：nextQuarter 每季都会排这一发（排程点在 :3000-3004，
+    // 那一处本分支也挂了 `!get().demoMode`——回调是宏任务，积压到 demoMode 已为 false 之后才跑就拦不住了）。跑满 4 年就是 16 帧塞进老师的存档列表。手动存档与导入落库由 UI 层禁用（第 2 闸）。
+    if (get().demoMode) return;
     const { state, resetCount } = get();
     const timestamp = Date.now();
     const date = new Date();
@@ -526,6 +539,29 @@ export const useEnterpriseStore = create<{
     });
     get().addOperationLog('导入存档', `设为当前进度：第${imported.operation.currentYear}年第${imported.operation.currentQuarter}季`
       + (fromVersion >= SAVE_FORMAT_VERSION ? '' : '（旧版存档已迁移至v4，建议重置开新局）'));
+  },
+
+  // 进入课堂演示：当前屏只拍进内存，换一份全新开局态（createFreshState 的 isPaused 本就是 false）。
+  // 不用 module-level 变量存快照：那样会有第二个"真相来源"，React 侧看不见，而 store 顶层字段
+  // 既不进存档序列化（saveGame 只 stringify state）也不进指纹作用域，放这里才是零副作用的位置。
+  enterDemo: () => {
+    // 快照只能在**非演示态**拍摄：演示态中再次 enterDemo（双击、或入口在演示态仍可见）会把演示局那一屏
+    // 拍成快照，老师原屏只剩内存里被覆盖的引用——没手存过的进度就永久没了。
+    // 这是 store 层不变量，不是 UI 的事：UI 藏起入口是第二道，不是第一道。
+    if (get().demoMode) return;
+    set((s) => ({
+      demoSnapshot: JSON.parse(JSON.stringify(s.state)) as EnterpriseState,
+      state: createFreshState(),
+      demoMode: true,
+      validationError: null,
+    }));
+  },
+
+  // 退出演示：没有快照就什么都不动（幂等——浏览器刷新后 demoMode 已是 false，横幅不该再清一遍）
+  exitDemo: () => {
+    set((s) => (s.demoSnapshot
+      ? { state: s.demoSnapshot, demoSnapshot: null, demoMode: false, validationError: null }
+      : { demoSnapshot: null, demoMode: false }));
   },
 
   // 重置游戏
@@ -1504,7 +1540,7 @@ export const useEnterpriseStore = create<{
       const arrivalAbs = orderAbs + material.leadTime;
       const arrival = fromAbsQuarter(arrivalAbs);
       const newOrder = {
-        id: `order-${Date.now()}`,
+        id: `order-${Date.now()}-${rawMaterialOrderSeq++}`,   // 带序号（修 7）：原来只有 Date.now()，同步批量（演示的 skipQuarter/单步、脚本化驱动）里一季内几张原料单落同一毫秒 → 同 id 多张 → LogisticsCenter.tsx:146 的 `key={order.id}` 是重复键，取消按 id `filter`（:1605）会把同毫秒的几张一起删掉、却只按第一张写日志。与订货会订单 id（:1748）同写法。
         materialType,
         quantity,
         price: material.price,
@@ -2957,10 +2993,15 @@ export const useEnterpriseStore = create<{
         }
       }
       
-      // 自动保存游戏
-      setTimeout(() => {
-        get().autoSaveGame();
-      }, 0);
+      // 自动保存游戏：演示态下**不排这一发**——回调是宏任务，而 demoMode 是执行时刻读的，
+      // 只要 exitDemo 抢在队列排空前跑完（同步推进整局的 runner 就会这样），积压的回调
+      // 会在 demoMode 已为 false 之后逐条通过，往老师的存档列表里追加 N 帧。
+      // autoSaveGame 首行那道闸保留：它管的是"有人直接调用它"这一路。
+      if (!get().demoMode) {
+        setTimeout(() => {
+          get().autoSaveGame();
+        }, 0);
+      }
       
       return {
         state: updatedState,
