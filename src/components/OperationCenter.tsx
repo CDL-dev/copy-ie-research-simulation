@@ -620,13 +620,13 @@ const YearlyExportButtons: React.FC<{
   currentYear: number;
 }> = ({ allSaveFiles, financialLogs, currentYear }) => {
   // 最终审查修复波（必修 1）：演示期禁用本颗按钮。理由是**这份产物有两列根本不读演示局**——
-  // `buildYearControlTable` 的 q-1「季初现金盘点」与 q-20「本季结余」优先取存档帧
-  // （utils/controlTable.ts:54 的 `quarterStartSnapshot` 与 :133 的 `snapshotCash`），
-  // 而这里的 `allSaveFiles` 是主组件 :1035 那句 `getSaveFiles()` 当场读 localStorage 的结果。
-  // 演示局**没有帧**（那是刻意的内存隔离，规格 §4.2），于是导出的 CSV 里这两列是**老师上一局
-  // 同年季的数**、其余 28 行是演示局的账——一份混两份账的文件，比"这个按钮现在不能用"更糟。
-  // 存档包同形（`SaveLoadPanel.tsx` 的「导出存档包」一并禁用）。要让演示期也能导这两件产物，
-  // 得把取数源从本机存档帧换成内存态，那是新架构、明确超出本期（规格 §10 条 20）。
+  // `buildYearControlTable` 的 q-1「季初现金盘点」与 q-20「本季结余」优先取存档帧（utils/controlTable.ts:54
+  // 的 `quarterStartSnapshot` 与 :133 的 `snapshotCash`），帧列表来自本组件 :1038；修复前那句是无条件的
+  // `getSaveFiles()`，而演示局没有帧、(年,季) 又与老师真实局的帧同号 ⇒ CSV 那两列是**老师上一局同年季的数**、
+  // 其余 28 行是演示局的账——一份混两份账的文件，比"这个按钮现在不能用"更糟。存档包同形（`SaveLoadPanel.tsx`）。
+  // 复审后续波把 :1038 改成演示期喂 `[]`（页面 q-1/q-10 由此不再混帧），本颗按钮**照旧禁用**：无帧只让 CSV 的
+  // q-1 改走 controlTable.ts:109 的盘点日志回退，那个口径不扣短贷本息与应付归还，印出来仍是错数。
+  // 根治＝把取数源换成内存态（新架构，本期不做）或页面与 CSV 单源重构（roadmap §5.2）——规格 §10 条 20。
   const demoMode = useEnterpriseStore((s) => s.demoMode);
   const handleExportYear = (year: number) => {
     const table = buildYearControlTable(year, financialLogs, allSaveFiles);
@@ -1030,9 +1030,12 @@ const OperationControlTable: React.FC<{
 const OperationCenter: React.FC = () => {
   const { state, nextQuarter, getSaveFiles, registerOtherCashFlow } = useEnterpriseStore();
   const { operation, production, logistics } = state;
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
 
-  // 获取所有存档
-  const allSaveFiles = getSaveFiles();
+  // 演示局没有存档帧，而它的 (年,季) 与老师真实局的帧必然同号：喂进去就会在 q-1 与 q-10 两格印出上一局的数。
+  // 空数组让这两格各自退回内存态取数（q-1 走 cashFlowHistory，q-10 走空白线分支），非演示态逐字节不变。
+  // 这层护栏与 :622-629 那段导出禁用说明同族（规格 §4.8 第 2 闸）；根治法是页面与 CSV 单源（roadmap §5.2），届时删掉本处三元即可。
+  const allSaveFiles = demoMode ? [] : getSaveFiles();
 
   return (
     <div className="space-y-6">

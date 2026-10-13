@@ -315,4 +315,22 @@ describe('演示面板的界面说法与 README 一致', () => {
     );
     expect(saveLoadSrc).toContain('课堂演示中不可用：导出的包里 current 是演示局、saves 是本机历史帧');
   });
+
+  // 复审本波新增的 Important：上面两条只管得住**导出**，页面那 30 行同源的取数没管。
+  // 主组件 `OperationCenter.tsx` 的 `const allSaveFiles = getSaveFiles()` 把本机存档帧喂给整页，
+  // 而演示局的 (年,季) 与老师真实局的帧必然同号 ⇒ q-1「季初现金盘点」（`getQuarterStartInventory`
+  // → `getLatestSaveFile`）与 q-10「开始下一批生产」（`getProductionLineData`）印的是上一局的数。
+  // 修法是最小的一道护栏：演示期不喂帧（空数组），这两格各自退回内存态取数。
+  // 断法与上面同一族：钉**那一句条件表达式本身**（不是 `toContain('demoMode')`——文件里两处注释
+  // 与 YearlyExportButtons 的 selector 早就满足它，删光护栏也不会红），并就近要求它头顶真有 demoMode selector。
+  it('演示期主组件不喂本机存档帧（页面 q-1 与 q-10 两格因此退回内存态取数）', () => {
+    expect(operationCenterSrc).toMatch(
+      /const allSaveFiles = demoMode \? \[\] : getSaveFiles\(\);/
+    );
+    // 主组件那颗 demoMode selector 必须离这句足够近：只有 YearlyExportButtons 里有 selector 的话，
+    // 上面那句拿到的 demoMode 是未声明标识符（tsc 直接红）或被别的绑定遮蔽，护栏是假的。
+    expect(operationCenterSrc).toMatch(
+      /const demoMode = useEnterpriseStore\(\(s\) => s\.demoMode\);[\s\S]{0,300}?const allSaveFiles = demoMode \? \[\] : getSaveFiles\(\);/
+    );
+  });
 });

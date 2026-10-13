@@ -23,9 +23,9 @@ import { digestFrame } from '../utils/saveDigest';
 export { digestSkipNote, isComparableDigest };
 
 // 下载：Blob → createObjectURL → appendChild → click → removeChild → revokeObjectURL
-// （仓库既有写法，见 OperationCenter.tsx:471-485 的日志导出与 :625-633 的控制表导出）。
+// （仓库既有写法，见 OperationCenter.tsx:471-485 的日志导出与 :634-642 的控制表导出）。
 // 三处产物共用这一条：存档包 .json、核对报告 .txt / .json。
-// BOM 只有 CSV 加（Windows Excel 认中文，OperationCenter.tsx:625），这里两类产物都**不加**——
+// BOM 只有 CSV 加（Windows Excel 认中文，OperationCenter.tsx:634），这里两类产物都**不加**——
 // BOM 会让 JSON.parse 与 python json.loads 当场报错（规格 §4.2），.txt 加了也会在 diff 里多一个隐形字符。
 const downloadFile = (fileName: string, content: string, mime: string): void => {
   const blob = new Blob([content], { type: `${mime};charset=utf-8` });
