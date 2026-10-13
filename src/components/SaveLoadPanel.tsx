@@ -85,8 +85,11 @@ const SaveLoadPanel: React.FC = () => {
   // ④ handleDeleteSave 删帧是**第四条** setItem('enterpriseSaveFiles') 路径，完全不经 store 动作，store 层拦不住；
   // ⑤ 「加载」走 store 的 loadGame（enterpriseStore.ts:468），它没有 demoMode 闸——演示中载入一份进度，
   //    之后「重新开始」/「退出演示」的 exitDemo() 会用进演示前那一屏把它静默顶掉；
-  // ⑥ 「重置游戏」会把 resetCount++ 写进**模块级变量**，exitDemo 恢复快照也带不回它（演示结束后顶部重置次数虚增），
-  //    且当场换掉演示屏让 runner 的队列指空——按"没有任何一个动作能写 localStorage 或换掉当前屏"的验收线一并禁用。
+  // ⑥ 「重置游戏」的唯一承重理由：resetGame 的 `resetCount++` 打在**模块级变量**上（enterpriseStore.ts:8 的
+  //    `let resetCount`，:570），而 enterDemo/exitDemo 只快照 `state`、不含这个计数器——演示中重置一次，
+  //    退出演示后顶部「重置次数」就虚增一格，此后每帧的名字与逐帧指纹作用域（都含 resetCount）跟着带上这个虚数。
+  //    （原先这里还挂着两条理由，Task 8 审查判为失实、已删：`resetGame` 根本不碰 runner 的队列，
+  //     而"演示中换掉当前屏"本就是演示沙盒的本意，把它们写在这儿等于给下一个人扩大禁用面的借口。）
   // 导出类只读动作（导出存档包 / 核对报告 txt/json / 导入预览）保持可用：老师要导演示局的资料当板书（§4.8 第 2 闸）。
   const demoMode = useEnterpriseStore((s) => s.demoMode);
 
@@ -328,7 +331,7 @@ const SaveLoadPanel: React.FC = () => {
             <button
               onClick={handleResetGame}
               disabled={demoMode}
-              title={demoMode ? '课堂演示中不可用：它当场换掉演示屏、重置次数还会在退出演示后留下虚增的读数' : '重置当前进度'}
+              title={demoMode ? '课堂演示中不可用：它的重置次数记在模块级计数器上，退出演示恢复快照也带不回来，之后每帧读数与指纹都带上虚增的那一格' : '重置当前进度'}
               className="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               重置游戏

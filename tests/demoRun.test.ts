@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFreshState, useEnterpriseStore } from '../src/store/enterpriseStore';
 import { useDemoRunner, type RunningStep } from '../src/demo/runner';
+import { absQuarter } from '../src/utils/rules';   // 造"到期短贷正好在下一季到期"要算绝对季度
 import type { DemoOp } from '../src/demo/types';
 
 const store = () => useEnterpriseStore.getState();
@@ -332,5 +333,79 @@ describe('同步批量的原料单 id（审查修 7）', () => {
     // 注意这里没有资金问题：`cancelRawMaterialOrder` 根本不碰现金（:1623 `cashChange: 0`，
     // 日志自陈「下单未付款，无资金变动」），所以第 1 轮注释里那句"只退款一张"是错的，已按实情改成"只记一条日志"。
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ===== Task 8 审查修 C：「跳过此步」不该能掏空队列后让下一发 step() 报一句假"编排层有 bug" =====
+// 可达路径是课堂上最容易撞的一格（规格 §5 点名的"第 3 年末透支被拒"）：被拒的正是本季唯一的
+// nextQuarter 步 → 老师点「跳过此步」→ 队列空 → 再点单步 → 撞 advanceOne 的空队列分支。
+// 那句报错把审计者引向编排层，而真正发生的是老师亲手跳掉了本季最后一步。
+describe('skipBlocked：跳过被拒的那一步（Task 8 审查修 C）', () => {
+  /** 把本季队列只剩推进步、并让它被引擎当场拒掉：nextQuarter（store:2171）的到期短贷守卫
+   *  `due > initialCash` 只 set validationError、不动 state 引用 → runner 判为被拒。 */
+  const blockOnLastStep = () => {
+    runner().start();
+    const s = store().state;
+    const op = s.operation;
+    const nextQ = op.currentQuarter === 4 ? 1 : op.currentQuarter + 1;
+    const nextY = op.currentQuarter === 4 ? op.currentYear + 1 : op.currentYear;
+    const dueAbs = absQuarter(nextY, nextQ);
+    useEnterpriseStore.setState({
+      state: {
+        ...s,
+        finance: {
+          ...s.finance,
+          cash: 1,
+          loans: [...s.finance.loans, {
+            id: 'loan-test-due-next-quarter', kind: 'short', principal: 20, rate: 0.05,
+            drawnAbs: dueAbs - 4, termQuarters: 4,
+          }],
+        },
+      },
+    });
+    useDemoRunner.setState({ queue: [mkStep('q-20', { kind: 'nextQuarter' })] });
+    runner().step();
+  };
+
+  it('被拒的正是本季唯一的 nextQuarter 步：skipBlocked() 后不再冒出「编排层有 bug」', () => {
+    withStepClock(blockOnLastStep);
+    expect(runner().phase).toBe('blocked');
+    expect(runner().blocked?.reason).toContain('到期短贷');   // 前置：真是引擎那句，不是空队列那句
+    expect(runner().queue).toHaveLength(1);                    // 被拒的步留着，"重试此步"有的可重
+
+    runner().skipBlocked();
+    const r = runner();
+    expect(r.queue).toHaveLength(0);
+    // 相位必须是"走不动"的那一格：空队列 + 还能继续误走的 paused 才是这套事故的本质
+    expect(r.phase).toBe('blocked');
+    expect(r.blocked?.reason ?? '').not.toContain('编排层有 bug');
+    expect(r.blocked).not.toBeNull();   // 必须仍说得出为什么停在这里
+
+    // 快捷键那一侧（面板的按钮此时置灰，但 step()/skipQuarter() 自己不能被真按到）：
+    runner().step();
+    expect(runner().blocked?.reason ?? '').not.toContain('编排层有 bug');
+    runner().skipQuarter();
+    expect(runner().phase).toBe('blocked');
+    expect(store().state.operation.currentQuarter).toBe(1);   // 一季也没推进，也没重跑本季
+  });
+
+  it('跳过队列中间的步：剩下的步继续可走，相位回到 paused', () => {
+    withStepClock(() => {
+      runner().start();
+      // 首位摆一条注定被拒的步（池子里没有这个 id 的交货 → store:2052 静默守卫），后面留着真步
+      useDemoRunner.setState({
+        queue: [
+          mkStep('q-14', { kind: 'deliverOrder', orderId: 'order-ghost' }),
+          mkStep('b-4', { kind: 'payTaxes' }),
+        ],
+      });
+      runner().step();
+      expect(runner().phase).toBe('blocked');
+      runner().skipBlocked();
+    });
+    const r = runner();
+    expect(r.blocked).toBeNull();
+    expect(r.phase).toBe('paused');
+    expect(r.queue.map((s) => s.op.kind)).toEqual(['payTaxes']);
   });
 });

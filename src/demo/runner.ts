@@ -74,6 +74,13 @@ const currentIntent = () =>
 // 讲解点"只自动停一次"靠它，模块级即可：start() 会清空
 let seenPausePoints = new Set<string>();
 
+// **「本季已无步可走」**（Task 8 审查修 C）：skipBlocked() 跳掉的正是本季最后一步时置真。
+// 它也是 blocked 的一种，光看 blocked 字段区分不出来（撞门的 blocked 队列非空、可以重试），
+// 而 advanceOne 的空队列分支讲的是另一件事（编排漏了推进步）——那句话在这一格是**假**的，
+// 会把审计者引向编排层。所以记一个和 seenPausePoints 同层级的模块级开关：
+// 不进 zustand 状态、不进存档，start()/exit() 一律复位。
+let queueExhausted = false;
+
 /** 给决策层的裸步骤补上面板要显示的元信息（讲解点、控制表行名、动作描述） */
 const decorate = (d: DemoStep): RunningStep => {
   const point = pausePointFor(d.stepId);
@@ -120,7 +127,9 @@ const advanceOne = (): { ok: boolean } => {
   const runner = useDemoRunner.getState();
   const [head, ...rest] = runner.queue;
   // 队列空掉只可能是编排漏了推进步：宁可停出来说话，也不要在这里偷偷 expand() 重跑一遍本季
-  // （重跑会二次投广告、二次下单，那是数据损坏而不是停住）
+  // （重跑会二次投广告、二次下单，那是数据损坏而不是停住）。
+  // 「老师跳掉了本季最后一步」那一条**不从这里走**——skipBlocked() 当场就停住并把话说清（修 C），
+  // step() 见到那个私有开关直接不动，所以这句「编排层有 bug」只在真是编排漏步时才可能印出来。
   if (!head) {
     const op = useEnterpriseStore.getState().state.operation;
     useDemoRunner.setState({
@@ -205,6 +214,8 @@ interface DemoRunner {
   play: () => void;
   pause: () => void;
   skipQuarter: () => void;
+  /** 面板「跳过此步」的唯一入口（Task 8 审查修 C）：视图层不许再伸手改 runner 的私有形状 */
+  skipBlocked: () => void;
   restart: () => void;
   exit: () => void;
   setSpeed: (ms: number) => void;
@@ -224,10 +235,16 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   start: () => {
     useEnterpriseStore.getState().enterDemo();
     seenPausePoints = new Set<string>();
+    queueExhausted = false;
     set({ phase: 'paused', queue: expand(), blocked: null, lastStep: null });
   },
 
-  step: () => { advanceOne(); },
+  step: () => {
+    // 队列被「跳过此步」跳空之后就不再多走一步（修 C）：advanceOne 的空队列分支只描述
+    // "编排漏了推进步"，这一格却是老师亲手跳掉的，不该由单步键或快捷键再撞出那句假报错。
+    if (queueExhausted) return;
+    advanceOne();
+  },
 
   play: () => {
     if (get().phase === 'playing' || get().queue.length === 0) return;
@@ -267,6 +284,41 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
     }
   },
 
+  // 「跳过此步」的唯一入口（Task 8 审查修 C）：丢弃队首那一步，也就是撞门被拒的那一步。
+  // 语义原先写在面板的 JSX 里（`useDemoRunner.setState((s) => ({ queue: s.queue.slice(1), phase: 'paused', blocked: null }))`），
+  // 视图层伸手改 runner 的私有形状，还没考虑"丢弃后队列空了"这一格：
+  // 被拒的正是本季唯一的推进步（规格 §5 点名的"第 3 年末透支被拒"）时，那一下就把它跳成了空队列，
+  // 下一发单步撞上 advanceOne 的 :124-131，报出一句"编排层有 bug"——把审计者指向错的模块。
+  skipBlocked: () => {
+    clearTimer();
+    const r = get();
+    if (r.queue.length === 0) return;   // 没步可跳（正常进不来：撞门时那一步一定留在队首）
+    const rest = r.queue.slice(1);
+    if (rest.length > 0) {
+      // 本季还有后续步：接着走，落回 paused、清掉报错区，与原来那版的语义一致
+      queueExhausted = false;
+      set({ queue: rest, phase: 'paused', blocked: null });
+      return;
+    }
+    // 丢弃后队列空 = 被跳掉的正是本季最后一步。两条歧路都不许走：
+    // ① expand() 重跑本季 → 二次投广告、二次下单，那是数据损坏（advanceOne 的注释里写着）；
+    // ② 留着空队列当正常 → 下一发 step() 就冒出「编排层有 bug」那句假报错。
+    // 所以停在这里：相位保持 blocked（播放/单步/跳季都走不动，面板据 queue.length===0 置灰），
+    // 报错区说清真原因——本季已无步可走，要往下只能「重新开始」或退出演示。
+    const op = useEnterpriseStore.getState().state.operation;
+    queueExhausted = true;
+    set({
+      queue: [],
+      phase: 'blocked',
+      blocked: {
+        year: op.currentYear,
+        quarter: op.currentQuarter,
+        label: '本季动作序列',
+        reason: '本季最后一步已被跳过，这一季没有可走的步了：推进不到下一季，请「重新开始」或退出演示。',
+      },
+    });
+  },
+
   // 重新开始 = 先退出演示（把老师的当前屏换回来）再重进（拍新快照、换一份开局态）。
   // 不能只调 start()：enterDemo 在 demoMode 为 true 时是幂等早退（store:551，Task 1 有测试钉着它），
   // 只调 start 会对"当前半年季"重跑 decideQuarter——二次扣广告、整替订单池、可能二次借短贷，
@@ -280,6 +332,7 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   exit: () => {
     clearTimer();
     useEnterpriseStore.getState().exitDemo();
+    queueExhausted = false;   // 与 seenPausePoints 同一层级的私有开关，出演示一并复位
     set({ phase: 'idle', queue: [], blocked: null, lastStep: null });
   },
 

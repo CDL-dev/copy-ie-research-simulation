@@ -238,19 +238,39 @@ describe('演示剧本引用的都是真实存在的东西（演示模式规格 
 // 与文件开头三组同一套办法：node、无 jsdom，核对的是渲染要用到的源码文本——
 // 挡"README/规格写了界面里根本没有的说法"，行为回归在 demoRun/demoIsolation 那边。
 describe('演示面板的界面说法与 README 一致', () => {
-  it('横幅、按钮、退出提示这些名字真在组件里', () => {
+  // 修 D3（Task 8 审查）：原先写成 `expect(demoPanelSrc + pageSrc).toContain(text)`，拼接让断言失去
+  // 文件归属——「退出演示」只在横幅里出现过也算抽屉那半边过了；而 `'课堂演示'` 是横幅那句
+  // 「课堂演示中 · …」的子串，纯冗余。改成按文件各自断言。
+  it('横幅、按钮、退出提示这些名字真在各自组件里', () => {
+    expect(pageSrc).toContain('课堂演示中 · 全部改动只在内存，退出即恢复');
+    expect(pageSrc).toContain('退出演示');
     [
-      '课堂演示中 · 全部改动只在内存，退出即恢复',
       '课堂演示', '退出演示', '播放', '暂停', '单步', '跳到下一季', '重新开始',
       '打开规则说明',
-    ].forEach((text) => expect(demoPanelSrc + pageSrc).toContain(text));
+    ].forEach((text) => expect(demoPanelSrc).toContain(text));
   });
 
-  it('演示期间三个会写本机存档的按钮都挂着 demoMode 禁用', () => {
-    expect(saveLoadSrc).toContain('demoMode');
+  // 修 A（Task 8 审查）：原先只断 `expect(saveLoadSrc).toContain('demoMode')`，那句注释和 `:91` 的
+  // selector 单独就能满足它——把六处 `disabled={demoMode}` 全删掉也不会红，而 §4.8 第 2 闸是 P0 写盘线
+  // 在 UI 侧的唯一防线，一次"顺手清理 disabled"就能静默破线。改成**逐个 handler 断邻近性**：
+  // onClick 之后 120 个字符内必须出现这道 disabled，删哪一处就红那一条（窗口卡得比下一个按钮近，
+  // 中间隔着 title/className/标签文字/`</button>`，不会因为"文件里别处有 demoMode"而蒙过）。
+  it('演示期间六个会写本机存档或换掉当前屏的按钮各自就近挂着 demoMode 禁用', () => {
+    const GATED_HANDLERS = [
+      'handleManualSave', 'handleResetGame', 'handleLoadSave',
+      'handleDeleteSave', 'handleImportToList', 'handleApplyToCurrent',
+    ];
+    GATED_HANDLERS.forEach((fn) => {
+      expect(saveLoadSrc).toMatch(
+        new RegExp(`onClick=\\{[^{}]*${fn}[^{}]*\\}[\\s\\S]{0,120}?disabled=\\{(?:isPaused \\|\\| )?demoMode\\}`)
+      );
+    });
     expect(demoPanelSrc).not.toContain('saveGame()');   // 面板自己不落盘
   });
 
+  // 顶栏那一侧的两道闸同属 §4.8 第 2 闸：「暂停运营」一按就拒绝所有变更操作、直接打死演示；
+  // 「待支付应付税」演示期可点会和 runner 的第一个 payTaxes 步抢同一个动作（那步随后被判被拒、
+  // 把 store 原文印进抽屉）。断法与上面一致：就近的 disabled 里必须真有 demoMode。
   it('暂停运营按钮在演示中被置灰（它一按就打死演示）', () => {
     expect(pageSrc).toContain('课堂演示期间不可用');
   });
