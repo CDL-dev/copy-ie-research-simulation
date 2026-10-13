@@ -20,10 +20,13 @@ const mkStep = (stepId: string, op: DemoOp, isPausePoint = false): RunningStep =
  * 条目，`deliverOrder` 用 `map(o => o.id === orderId ? {…isDelivered:true} : o)`（store:2061）
  * 一次把两张都标记已交、却只扣一张的库存与应收，第二条交货步随即撞 :2052 的静默守卫
  * （`targetOrder.isDelivered` → `return state`）→ runner 判撞门。
- * 真界面有 300ms 限速兜着，同步连推 16 季没有，于是"16 季零撞门"退化成同毫秒碰撞的概率题
- * （实测：同一份剧本连跑三次，第二次就在第2年第4季的交货步撞门）。
+ * 但那条下限**只管得到 `play()`**（规格 §4.6/§10 条 7 的更正口径）：`skipQuarter()` 与 `step()` 是同步批量，
+ * 一次调用就把整季的步走完，不受任何时间下限保护，于是同步连推 16 季时"零撞门"退化成同毫秒碰撞的概率题
+ * （实测：同一份剧本连跑三次，第二次就在第2年第4季的交货步撞门）。原料单那一侧已在 store 侧用
+ * id 序号解决（修 7，store:1543，不靠时间间隔）；订货会这一侧的 `-${i}` 每次都从 0 起，跨会议落同一毫秒仍是同
+ * 一组 id，所以这条测试必须自己把时钟装上。
  * 这里让每次 Date.now() 前进 300ms——把规格自己的前提装回测试，**不放宽任何断言**，
- * 测的是剧本与资金曲线，不是 id 撞车的运气。引擎侧的根因（id 不含年季）已进 Task 7 报告。
+ * 测的是剧本与资金曲线，不是 id 撞车的运气。引擎侧的根因（订货会 id 不含年季）已进 Task 7 报告与规格 §10 条 7。
  */
 const MIN_STEP_MS = 300;
 const withStepClock = (run: () => void): void => {
@@ -226,7 +229,7 @@ describe('blocked 的收尾（审查修 2）', () => {
       useDemoRunner.setState({ queue: [mkStep('b-4', { kind: 'payTaxes' })] });
       runner().step();
     });
-    // 被拒时置的 blocked 相位必须跟着回来，否则 skipQuarter(:232) 一直早退、面板显示"被拒但报错区已空"
+    // 被拒时置的 blocked 相位必须跟着回来，否则 skipQuarter(:249) 一直早退、面板显示"被拒但报错区已空"
     expect(runner().blocked).toBeNull();
     expect(runner().phase).toBe('paused');
   });
@@ -247,9 +250,24 @@ describe('skipQuarter 的相位（审查修 3）', () => {
       runner().play();                       // playing + 一个 600ms 后才响的 timer（测试里不会响）
       runner().skipQuarter();                // 同步批量跑完整季：timer 清了，相位必须跟着清
     });
-    // 停在 playing 却没有 timer 时 play() 首行(:214)早退 → 面板显示"播放中"却一步都走不了
+    // 停在 playing 却没有 timer 时 play() 首行(:232)早退 → 面板显示"播放中"却一步都走不了
     expect(runner().phase).not.toBe('playing');
     expect(runner().phase).toBe('paused');
+  });
+
+  // 修 3 那个 `set({ phase: 'paused' })` 落在循环的早退检查**之前**，于是它把 finished 和 blocked
+  // 一起盖掉了（第 2 轮修 2）。两笔后果：
+  // ① 终局后按一次 Shift+→：`finished` → `paused`，队列已空、play() 见 queue.length===0 直接 return，
+  //    面板的"已完成"读数丢失、播放键死住；
+  // ② 队列已空那个 blocked 标记（runner.ts:124-131）被抹成 `phase:'paused'` 而 `blocked` 字段还在
+  //    → 报错区有文字、相位却说正常。
+  // 这一条钉的是 ①（② 由同一个相位判断一起修掉：只有从 playing 进来才落 paused）。
+  it('终局后 skipQuarter 不把 finished 盖成 paused', () => {
+    driveFullRun();
+    expect(runner().phase).toBe('finished');   // 前置状态确认，否则红点会落在别处
+    runner().skipQuarter();
+    expect(runner().phase).toBe('finished');
+    expect(runner().queue).toHaveLength(0);
   });
 });
 
@@ -310,7 +328,9 @@ describe('同步批量的原料单 id（审查修 7）', () => {
     expect(ids.length).toBeGreaterThanOrEqual(2);
     // 这条钉的是修 7 之前的缺陷：原料单 id 曾经只有 `order-${Date.now()}`（store:1543，不带序号），
     // 同毫秒的两张就是同 id → LogisticsCenter.tsx:146 的 `key={order.id}` 是 React 重复键，
-    // 而取消按 id `filter`（:1605）会把同毫秒的几张一起删掉、却只按第一张写日志（:1601 只退款一张）。
+    // 而取消按 id `filter`（:1605）会把同毫秒的几张**一起删掉**，却只按 :1601 `find` 到的第一张写一条日志。
+    // 注意这里没有资金问题：`cancelRawMaterialOrder` 根本不碰现金（:1623 `cashChange: 0`，
+    // 日志自陈「下单未付款，无资金变动」），所以第 1 轮注释里那句"只退款一张"是错的，已按实情改成"只记一条日志"。
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

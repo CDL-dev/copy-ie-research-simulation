@@ -186,7 +186,7 @@ const advanceOne = (): { ok: boolean } => {
 
 // 规格 §4.6 的下限。Task 7 真跑给它加了第二个理由：`Date.now()` 不只进日志，还进**业务主键**
 // （订货会订单 id = `order-${Date.now()}-${i}`，store:1748；原料单 id 原来是 `order-${Date.now()}`、
-// 不带序号，store:1542），同毫秒的两次订货会会撞出同 id 的两张单，交货时一次标记两张却只扣一张的库存与应收。
+// 不带序号，store:1543），同毫秒的两次订货会会撞出同 id 的两张单，交货时一次标记两张却只扣一张的库存与应收。
 // **但这条下限只管得到 `play()`**：`step()` 与 `skipQuarter()` 是同步批量，一次调用就把整季的步走完，
 // 相邻两步常常落在同一个毫秒，下限根本拦不住它们。同毫秒碰撞的正解是让 id 带序号（原料单已在 store 侧修掉），
 // 不是靠时间间隔；测试里则显式装时钟（见 tests/demoRun.test.ts 的 withStepClock / withFrozenClock）。
@@ -248,10 +248,12 @@ export const useDemoRunner = create<DemoRunner>((set, get) => ({
   // 但剧本万一在某季产出了空队列，没有这道闸这个 while 就转不完。
   skipQuarter: () => {
     clearTimer();
-    // 先落回 paused 再跑循环：这是**同步批量**，没有 play() 的 300ms timer 在背后驱动。
-    // 从 playing 进来却只在末尾留着 playing 的话，面板显示"播放中"，而 play() 首行的
-    // `phase === 'playing'` 早退会让它一步都走不动。循环内部再按需转 blocked/finished。
-    set({ phase: 'paused' });
+    // 只有从 playing 进来才落回 paused：这是**同步批量**，没有 play() 的 300ms timer 在背后驱动，
+    // 留在 playing 的话面板显示"播放中"，而 play() 首行的 `phase === 'playing'` 早退会让它一步都走不动。
+    // **不能无条件落 paused**（第 2 轮修 2）：这行在下面的早退检查之前执行，无条件写会把终局的 `finished`
+    // 和队列已空时刚置的 `blocked` 一起盖掉——前者让"已完成"读数丢失（队列已空，play() 再也起不来），
+    // 后者让报错区还留着文字而相位说正常。这两种相位下循环本来就会立刻返回，不动它才是对的。
+    if (get().phase === 'playing') set({ phase: 'paused' });
     const startAbs = absQuarter(
       useEnterpriseStore.getState().state.operation.currentYear,
       useEnterpriseStore.getState().state.operation.currentQuarter,
