@@ -79,6 +79,16 @@ const SaveLoadPanel: React.FC = () => {
   const fileInput = useRef<HTMLInputElement | null>(null);
   // 暂停期间两个写动作禁用（规格 §7.10：导出/读文件/预览是只读，照常可用）
   const isPaused = state.isPaused;
+  // 课堂演示闸门（规格 §4.8 第 2 闸 + Task 7 审查补的两处）：演示态下本面板不允许任何动作
+  // 写 localStorage 或换掉当前屏——
+  // ①②③ saveGame / importSaveFiles / applyImportedState 三个落库动作按 §4.8 就归 UI 层禁（store 无 demoMode 闸）；
+  // ④ handleDeleteSave 删帧是**第四条** setItem('enterpriseSaveFiles') 路径，完全不经 store 动作，store 层拦不住；
+  // ⑤ 「加载」走 store 的 loadGame（enterpriseStore.ts:468），它没有 demoMode 闸——演示中载入一份进度，
+  //    之后「重新开始」/「退出演示」的 exitDemo() 会用进演示前那一屏把它静默顶掉；
+  // ⑥ 「重置游戏」会把 resetCount++ 写进**模块级变量**，exitDemo 恢复快照也带不回它（演示结束后顶部重置次数虚增），
+  //    且当场换掉演示屏让 runner 的队列指空——按"没有任何一个动作能写 localStorage 或换掉当前屏"的验收线一并禁用。
+  // 导出类只读动作（导出存档包 / 核对报告 txt/json / 导入预览）保持可用：老师要导演示局的资料当板书（§4.8 第 2 闸）。
+  const demoMode = useEnterpriseStore((s) => s.demoMode);
 
   // 加载本地存档
   useEffect(() => {
@@ -284,7 +294,9 @@ const SaveLoadPanel: React.FC = () => {
           <div className="flex flex-wrap gap-2 mb-4">
             <button
               onClick={handleManualSave}
-              className="flex-1 bg-green-600 text-white px-3 py-2 rounded-md hover:bg-green-700 transition-colors"
+              disabled={demoMode}
+              title={demoMode ? '课堂演示中不写本机存档列表，退出演示即恢复原进度' : '保存当前状态'}
+              className="flex-1 bg-green-600 text-white px-3 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               手动存档
             </button>
@@ -315,7 +327,9 @@ const SaveLoadPanel: React.FC = () => {
             </button>
             <button
               onClick={handleResetGame}
-              className="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 transition-colors"
+              disabled={demoMode}
+              title={demoMode ? '课堂演示中不可用：它当场换掉演示屏、重置次数还会在退出演示后留下虚增的读数' : '重置当前进度'}
+              className="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               重置游戏
             </button>
@@ -420,16 +434,16 @@ const SaveLoadPanel: React.FC = () => {
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleImportToList}
-                  disabled={isPaused}
-                  title={isPaused ? '运营已暂停，请先继续运营再导入' : '同 id 冲突时改名追加，原有存档不变'}
+                  disabled={isPaused || demoMode}
+                  title={demoMode ? '课堂演示中不写本机存档列表，退出演示即恢复原进度' : isPaused ? '运营已暂停，请先继续运营再导入' : '同 id 冲突时改名追加，原有存档不变'}
                   className="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md text-sm hover:bg-blue-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
                   仅加入存档列表
                 </button>
                 <button
                   onClick={handleApplyToCurrent}
-                  disabled={isPaused}
-                  title={isPaused ? '运营已暂停，请先继续运营再导入' : '只替换当前屏，不自动写入存档列表'}
+                  disabled={isPaused || demoMode}
+                  title={demoMode ? '课堂演示中不替换当前屏，退出演示即恢复原进度' : isPaused ? '运营已暂停，请先继续运营再导入' : '只替换当前屏，不自动写入存档列表'}
                   className="flex-1 bg-indigo-600 text-white px-3 py-2 rounded-md text-sm hover:bg-indigo-700 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
                   设为当前进度
@@ -470,13 +484,17 @@ const SaveLoadPanel: React.FC = () => {
                     <div className="flex gap-1">
                       <button
                         onClick={() => handleLoadSave(saveFile)}
-                        className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
+                        disabled={demoMode}
+                        title={demoMode ? '课堂演示中不载入存档：载入的屏会在退出/重开演示时被进演示前的进度静默顶掉' : '载入这个存档'}
+                        className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         加载
                       </button>
                       <button
                         onClick={() => handleDeleteSave(saveFile.id)}
-                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                        disabled={demoMode}
+                        title={demoMode ? '课堂演示中不删本机存档：这一动作直接重写 localStorage，不经任何 store 闸门' : '删除这个存档'}
+                        className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         删除
                       </button>

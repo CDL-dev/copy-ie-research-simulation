@@ -25,6 +25,12 @@ const panelSrc = readFileSync(new URL('../src/components/SaveLoadPanel.tsx', imp
 const modalSrc = readFileSync(new URL('../src/components/RulesModal.tsx', import.meta.url), 'utf8');
 const storeSrc = readFileSync(new URL('../src/store/enterpriseStore.ts', import.meta.url), 'utf8');
 const auditSrc = readFileSync(new URL('../src/utils/audit.ts', import.meta.url), 'utf8');
+// Task 8：演示抽屉与主界面的"界面说法"守卫（规格 §6 第 4 组）。
+// readFileSync 沿用上面 panelSrc 的顶部写法，用例里不重复 import；saveLoadSrc 与 panelSrc 是同一个文件，
+// 起个别名只为让下面那组断言的意图直读（"存档面板挂了 demoMode 禁用"），避免两份读盘。
+const saveLoadSrc = panelSrc;
+const pageSrc = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+const demoPanelSrc = readFileSync(new URL('../src/components/DemoPanel.tsx', import.meta.url), 'utf8');
 
 const SAVE_SECTION = '存档与完整性校验';
 const sectionItems = (): string[] => {
@@ -225,5 +231,27 @@ describe('演示剧本引用的都是真实存在的东西（演示模式规格 
           .toBeLessThan(fresh.productionLineLimits[l.lineType]);
       });
     });
+  });
+});
+
+// ══ 演示抽屉的界面说法（Task 8，规格 §4.7/§6 第 4 组）═══════════════════════════
+// 与文件开头三组同一套办法：node、无 jsdom，核对的是渲染要用到的源码文本——
+// 挡"README/规格写了界面里根本没有的说法"，行为回归在 demoRun/demoIsolation 那边。
+describe('演示面板的界面说法与 README 一致', () => {
+  it('横幅、按钮、退出提示这些名字真在组件里', () => {
+    [
+      '课堂演示中 · 全部改动只在内存，退出即恢复',
+      '课堂演示', '退出演示', '播放', '暂停', '单步', '跳到下一季', '重新开始',
+      '打开规则说明',
+    ].forEach((text) => expect(demoPanelSrc + pageSrc).toContain(text));
+  });
+
+  it('演示期间三个会写本机存档的按钮都挂着 demoMode 禁用', () => {
+    expect(saveLoadSrc).toContain('demoMode');
+    expect(demoPanelSrc).not.toContain('saveGame()');   // 面板自己不落盘
+  });
+
+  it('暂停运营按钮在演示中被置灰（它一按就打死演示）', () => {
+    expect(pageSrc).toContain('课堂演示期间不可用');
   });
 });

@@ -9,13 +9,15 @@ import OperationCenter from '../components/OperationCenter';
 import SaveLoadPanel from '../components/SaveLoadPanel';
 import RulesModal from '../components/RulesModal';
 import DiscountPanel from '../components/DiscountPanel';
+import DemoPanel from '../components/DemoPanel';
+import { useDemoRunner } from '../demo/runner';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // 定义中心类型
 type CenterType = 'finance' | 'production' | 'logistics' | 'marketing' | 'operation';
 
 export default function Home() {
-  const { state, applyLongTermLoan, applyShortTermLoan, payTaxes, togglePaused, validationError, setValidationError } = useEnterpriseStore();
+  const { state, applyLongTermLoan, applyShortTermLoan, payTaxes, togglePaused, validationError, setValidationError, demoMode } = useEnterpriseStore();
   const { finance, operation } = state;
   const [activeCenter, setActiveCenter] = useState<CenterType>('finance');
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -51,6 +53,9 @@ export default function Home() {
                 <span className="text-sm font-bold text-yellow-800">{finance.taxesPayable}M</span>
               </button>
             )}
+            {/* 演示入口/抽屉只挂这一处：DemoPanel 自己决定渲染成入口按钮还是抽屉。
+                不要在页尾再挂第二个实例——两个实例会各自订阅 runner、各自渲染一份抽屉 */}
+            <DemoPanel onOpenRules={() => setRulesOpen(true)} />
             <button
               onClick={() => setRulesOpen(true)}
               className="bg-purple-50 text-purple-700 text-sm font-medium px-3 py-1 rounded-full hover:bg-purple-100"
@@ -59,7 +64,9 @@ export default function Home() {
             </button>
             <button
               onClick={togglePaused}
-              className={`${state.isPaused ? 'bg-green-500 hover:bg-green-600' : 'bg-orange-500 hover:bg-orange-600'} text-white text-sm font-medium px-3 py-1 rounded-full`}
+              disabled={demoMode}
+              title={demoMode ? '课堂演示期间不可用：它会拒绝所有变更操作，直接打死演示' : '暂停/继续运营（教学讲解模式）'}
+              className={`${state.isPaused ? 'bg-green-500 hover:bg-green-600' : 'bg-orange-500 hover:bg-orange-600'} text-white text-sm font-medium px-3 py-1 rounded-full disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               {state.isPaused ? '继续运营' : '暂停运营'}
             </button>
@@ -68,6 +75,22 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* 课堂演示横幅（规格 §4.7）：退出按钮必须走 runner 的 exit()（clearTimer + 清 phase/queue/lastStep/blocked），
+          只调 store 的 exitDemo() 会给 runner 留一指向已恢复真实进度的队列，下一发 step() 就在老师的数据上落子。
+          这里不订阅 runner 状态（getState() 只在点击时取一次），免得每个步进都重渲染整页 */}
+      {demoMode && (
+        <div className="bg-amber-500 text-white text-center py-2 font-medium">
+          课堂演示中 · 全部改动只在内存，退出即恢复
+          <span className="ml-3">第{operation.currentYear}年第{operation.currentQuarter}季</span>
+          <button
+            onClick={() => useDemoRunner.getState().exit()}
+            className="ml-3 bg-white/20 hover:bg-white/30 text-white text-sm px-3 py-1 rounded-full"
+          >
+            退出演示
+          </button>
+        </div>
+      )}
 
       {/* 暂停横幅 */}
       {state.isPaused && (
@@ -88,8 +111,8 @@ export default function Home() {
 
       <RulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
 
-      {/* 主要内容区域 */}
-      <main className="container mx-auto px-4 py-6">
+      {/* 主要内容区域：演示态给右侧固定定位的抽屉（360px）让出边距，Tailwind 3 任意值写法、不改配置 */}
+      <main className={`container mx-auto px-4 py-6 ${demoMode ? 'mr-[360px]' : ''}`}>
         {/* 导航选项卡 */}
         <div className="bg-white rounded-lg shadow-md p-4 mb-6">
           <div className="flex space-x-4">
