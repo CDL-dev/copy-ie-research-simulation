@@ -9,6 +9,11 @@ import { readFileSync } from 'node:fs';
 import { INTEGRITY_BOUNDARY, INTEGRITY_CAVEATS, CAUSE_TEXT } from '../src/utils/audit';
 import { SAVE_FORMAT_VERSION } from '../src/types/enterprise';
 import { RULE_SECTIONS, ruleTextFor } from '../src/components/RulesModal';
+// Task 6：剧本是纯数据，它对规则弹窗与运行控制表的引用是**跨文件的位置型键**，
+// 这三份数据各改各的都不会有编译错——只有这里的守卫能让它当场变红。
+// ruleTextFor 已在上面那行引入，ESM 下同名绑定重复声明直接报错，不再写第二遍。
+import { PAUSE_POINTS, YEAR_INTENTS } from '../src/demo/script';
+import { CONTROL_STEPS } from '../src/utils/controlTable';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 // 文档里的操作路径按 markdown 习惯给每段加反引号，比对"路径是否真写了这两级"时先把反引号剥掉，
@@ -150,5 +155,50 @@ describe('规则条目可被讲解点稳定引用（演示模式规格 §4.3）'
     expect(ruleTextFor({ section: 'ad', item: -1 })).toBeNull();
     expect(ruleTextFor({ section: 'ad', item: 999 })).toBeNull();
     expect(ruleTextFor({ section: 'nope', item: 0 })).toBeNull();
+  });
+});
+
+// ══ 演示剧本引用的键必须真实存在（Task 6，规格 §4.3/§4.4）═══════════════════════
+describe('演示剧本引用的都是真实存在的东西（演示模式规格 §4.3/§4.4）', () => {
+  it('每个讲解点的 stepId 都在 CONTROL_STEPS 里', () => {
+    const ids = new Set(CONTROL_STEPS.map((s) => s.id));
+    PAUSE_POINTS.forEach((p) => expect(ids.has(p.stepId)).toBe(true));
+  });
+
+  it('每个讲解点取回的原文含该步该有的关键词（只断非 null 会放行"指对节、指错条目"）', () => {
+    // 关键词是从 RULE_SECTIONS 的实际文字里挑出来的独词，不是随便一个高频字
+    const KEYWORD: Record<string, string> = {
+      'b-4': '所得税', 'q-17': '解锁', 'b-2': '订单池', 'q-3': '短期贷款',
+      'q-6': '提前', 'q-10': '加工费', 'q-8': '安装', 'q-14': '账期',
+      'q-11': '贴现', 'q-15': 'P2', 'e-1': '长期贷款', 'e-5': '市场开拓投资',
+    };
+    PAUSE_POINTS.forEach((p) => {
+      const text = ruleTextFor(p.rule);
+      expect(text).not.toBeNull();
+      // 失败时打印的是 received 整条原文，配合上一行的 not.toBeNull 足以定位到哪一步指错了条目
+      expect(text).toContain(KEYWORD[p.stepId]);
+    });
+  });
+
+  it('四年意图齐备且金额非负、市场投资含本地维持', () => {
+    ([1, 2, 3, 4] as const).forEach((y) => {
+      const it = YEAR_INTENTS[y];
+      expect(it.year).toBe(y);
+      expect(it.adAmount).toBeGreaterThan(0);
+      expect(it.cashPad).toBeGreaterThan(0);
+    });
+    // 已准入市场每年投 1M 维持，否则丧失准入（store:2798 第2年起判）
+    ([2, 3, 4] as const).forEach((y) => expect(YEAR_INTENTS[y].marketInvest).toContain('local'));
+  });
+
+  it('剧本只声明全自动线（Task 4 复审裁定的可达防线）', () => {
+    // decide.ts 的投料折算 `Math.ceil(qty / line.productionPeriod)` 在 P1/P2 上是可证的数值 no-op
+    // （BOM 每项 qty=1），它只有在"慢线 + qty≥2 的料项"同时出现时才生效，而后半个条件被
+    // addProductionLine 的 product 形参（store:328 写死 P1|P2）挡死。所以真正该钉的是这条：
+    // 剧本若塞进半自动/手工/柔性线，引擎的周期节奏按 line.type 判（store:2458-2467），
+    // 产能与投料两处折算会立刻失真——宁可让这条断言先响。
+    ([1, 2, 3, 4] as const).forEach((y) => {
+      YEAR_INTENTS[y].newLines.forEach((l) => expect(l.lineType).toBe('automatic'));
+    });
   });
 });
