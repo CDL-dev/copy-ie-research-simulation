@@ -269,9 +269,11 @@ describe('演示面板的界面说法与 README 一致', () => {
   });
 
   // 顶栏那一侧的两道闸同属 §4.8 第 2 闸：「暂停运营」一按就拒绝所有变更操作、直接打死演示；
-  // 「待支付应付税」演示期可点会和 runner 的第一个 payTaxes 步抢同一个动作（那步随后被判被拒、
-  // 把 store 原文印进抽屉）。断法与上面一致：就近的 disabled 里必须真有 demoMode。
-  it('暂停运营按钮在演示中被置灰（它一按就打死演示）', () => {
+  // 「待支付应付税」演示期原本也能点，会和 runner 排在本季第一个的 payTaxes 步抢同一个动作
+  // （那一步随后被判被拒、把 store 原文印进抽屉，审查修 D2）。断法与上面一致：
+  // onClick 之后 160 个字符内的 disabled 表达式里必须真有 demoMode。
+  it('暂停运营与待支付应付税在演示中被置灰（各说得出理由）', () => {
     expect(pageSrc).toContain('课堂演示期间不可用');
+    expect(pageSrc).toMatch(/onClick=\{payTaxes\}[\s\S]{0,160}?disabled=\{[^{}]*demoMode[^{}]*\}/);
   });
 });

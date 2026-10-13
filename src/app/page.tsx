@@ -29,90 +29,112 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50">
       {/* 顶部导航栏 */}
       <header className="bg-white shadow-md">
-        <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-          <div className="flex items-center">
-            <h1 className="text-xl font-bold text-gray-800">创新实践及科研训练·企业运营模拟（企业1专属版）</h1>
-          </div>
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2 bg-blue-50 px-3 py-1 rounded-full">
-              <span className="text-sm font-medium text-blue-800">当前年度/季度：</span>
-              <span className="text-sm font-bold text-blue-800">第{operation.currentYear}年 / 第{operation.currentQuarter}季度</span>
+        {/* 演示让位（Task 8 审查修 B）：抽屉是 `fixed right-0 top-0 h-full w-[360px] z-40`（在流外），
+            而页眉 <header> 是 static、没有 z-index——不让位时顶栏右簇（规则说明／暂停运营／存档管理）
+            整块落进抽屉底下并被吃掉点击。这颗边距与下面「三条横幅 + <main>」用的是**同一颗**：
+            两处共用同一个缩减盒，页眉与主内容因此同轴。
+            （旧写法把 `mr-[360px]` 直接叠在 `container mx-auto` 上是无效的：构建产物里
+            `.mx-auto{…margin-right:auto}` 在字节 4127、`.mr-\[360px\]{margin-right:360px}` 在 4438，
+            同特异度后者胜 → 右边距被钉死 360、只剩左自动边距，main 与页眉错轴，1920 下差 168px。）
+            抽屉收起时这颗边距不跟着缩——折叠状态住在 DemoPanel 内部（界面偏好，不进 runner/store），
+            page.tsx 拿不到它；代价是收起后右侧空出一条，换来的是恒与主内容同轴、且不依赖媒体查询的宽度档。 */}
+        <div className={demoMode ? 'mr-[360px]' : ''}>
+          <div className="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div className="flex items-center">
+              <h1 className="text-xl font-bold text-gray-800">创新实践及科研训练·企业运营模拟（企业1专属版）</h1>
             </div>
-            <div className="flex items-center space-x-2 bg-green-50 px-3 py-1 rounded-full">
-              <span className="text-sm font-medium text-green-800">现金余额：</span>
-              <span className="text-sm font-bold text-green-800">{finance.cash}M</span>
-            </div>
-            {finance.taxesPayable > 0 && (
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2 bg-blue-50 px-3 py-1 rounded-full">
+                <span className="text-sm font-medium text-blue-800">当前年度/季度：</span>
+                <span className="text-sm font-bold text-blue-800">第{operation.currentYear}年 / 第{operation.currentQuarter}季度</span>
+              </div>
+              <div className="flex items-center space-x-2 bg-green-50 px-3 py-1 rounded-full">
+                <span className="text-sm font-medium text-green-800">现金余额：</span>
+                <span className="text-sm font-bold text-green-800">{finance.cash}M</span>
+              </div>
+              {finance.taxesPayable > 0 && (
+                <button
+                  onClick={payTaxes}
+                  disabled={operation.currentQuarter !== 1 || demoMode}
+                  className="flex items-center space-x-2 bg-yellow-50 px-3 py-1 rounded-full hover:bg-yellow-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                  title={demoMode ? '课堂演示期间不可用：交税由演示剧本按季排步，手动点会把 runner 排在本季的第一个的那一步抢走、让它当场判成被拒' : (operation.currentQuarter !== 1 ? '应付税金在年初（第1季度）交纳' : '点击支付应付税')}
+                >
+                  <span className="text-sm font-medium text-yellow-800">待支付应付税：</span>
+                  <span className="text-sm font-bold text-yellow-800">{finance.taxesPayable}M</span>
+                </button>
+              )}
+              {/* 演示入口/抽屉只挂这一处：DemoPanel 自己决定渲染成入口按钮还是抽屉。
+                  不要在页尾再挂第二个实例——两个实例会各自订阅 runner、各自渲染一份抽屉 */}
+              <DemoPanel onOpenRules={() => setRulesOpen(true)} />
               <button
-                onClick={payTaxes}
-                disabled={operation.currentQuarter !== 1}
-                className="flex items-center space-x-2 bg-yellow-50 px-3 py-1 rounded-full hover:bg-yellow-100 disabled:opacity-60"
-                title={operation.currentQuarter !== 1 ? '应付税金在年初（第1季度）交纳' : '点击支付应付税'}
+                onClick={() => setRulesOpen(true)}
+                className="bg-purple-50 text-purple-700 text-sm font-medium px-3 py-1 rounded-full hover:bg-purple-100"
               >
-                <span className="text-sm font-medium text-yellow-800">待支付应付税：</span>
-                <span className="text-sm font-bold text-yellow-800">{finance.taxesPayable}M</span>
+                规则说明
               </button>
-            )}
-            {/* 演示入口/抽屉只挂这一处：DemoPanel 自己决定渲染成入口按钮还是抽屉。
-                不要在页尾再挂第二个实例——两个实例会各自订阅 runner、各自渲染一份抽屉 */}
-            <DemoPanel onOpenRules={() => setRulesOpen(true)} />
-            <button
-              onClick={() => setRulesOpen(true)}
-              className="bg-purple-50 text-purple-700 text-sm font-medium px-3 py-1 rounded-full hover:bg-purple-100"
-            >
-              规则说明
-            </button>
-            <button
-              onClick={togglePaused}
-              disabled={demoMode}
-              title={demoMode ? '课堂演示期间不可用：它会拒绝所有变更操作，直接打死演示' : '暂停/继续运营（教学讲解模式）'}
-              className={`${state.isPaused ? 'bg-green-500 hover:bg-green-600' : 'bg-orange-500 hover:bg-orange-600'} text-white text-sm font-medium px-3 py-1 rounded-full disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {state.isPaused ? '继续运营' : '暂停运营'}
-            </button>
-            {/* 存档管理面板 */}
-            <SaveLoadPanel />
+              <button
+                onClick={togglePaused}
+                disabled={demoMode}
+                title={demoMode ? '课堂演示期间不可用：它会拒绝所有变更操作，直接打死演示' : '暂停/继续运营（教学讲解模式）'}
+                className={`${state.isPaused ? 'bg-green-500 hover:bg-green-600' : 'bg-orange-500 hover:bg-orange-600'} text-white text-sm font-medium px-3 py-1 rounded-full disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {state.isPaused ? '继续运营' : '暂停运营'}
+              </button>
+              {/* 存档管理面板 */}
+              <SaveLoadPanel />
+            </div>
           </div>
         </div>
       </header>
 
-      {/* 课堂演示横幅（规格 §4.7）：退出按钮必须走 runner 的 exit()（clearTimer + 清 phase/queue/lastStep/blocked），
-          只调 store 的 exitDemo() 会给 runner 留一指向已恢复真实进度的队列，下一发 step() 就在老师的数据上落子。
-          这里不订阅 runner 状态（getState() 只在点击时取一次），免得每个步进都重渲染整页 */}
-      {demoMode && (
-        <div className="bg-amber-500 text-white text-center py-2 font-medium">
-          课堂演示中 · 全部改动只在内存，退出即恢复
-          <span className="ml-3">第{operation.currentYear}年第{operation.currentQuarter}季</span>
-          <button
-            onClick={() => useDemoRunner.getState().exit()}
-            className="ml-3 bg-white/20 hover:bg-white/30 text-white text-sm px-3 py-1 rounded-full"
-          >
-            退出演示
-          </button>
-        </div>
-      )}
-
-      {/* 暂停横幅 */}
-      {state.isPaused && (
-        <div className="bg-orange-500 text-white text-center py-2 font-medium">
-          运营已暂停（教学讲解模式）—— 所有操作暂时不可用，点击右上角"继续运营"恢复
-        </div>
-      )}
-
-      {/* 校验错误提示 */}
-      {validationError && (
-        <div className="container mx-auto px-4 pt-4">
-          <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-lg flex justify-between items-center">
-            <span className="text-sm">{validationError}</span>
-            <button onClick={() => setValidationError(null)} className="text-red-500 hover:text-red-700 ml-4">✕</button>
-          </div>
-        </div>
-      )}
-
       <RulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
 
-      {/* 主要内容区域：演示态给右侧固定定位的抽屉（360px）让出边距，Tailwind 3 任意值写法、不改配置 */}
-      <main className={`container mx-auto px-4 py-6 ${demoMode ? 'mr-[360px]' : ''}`}>
+  {/* 演示让位（Task 8 审查修 B）：抽屉是 `fixed right-0 top-0 h-full w-[360px] z-40`，
+      原先把 `mr-[360px]` 加在 `<main className="container mx-auto">` 上是无效的——构建产物里
+      `.mx-auto` 的 `margin-right:auto` 与 `.mr-\[360px\]` 同特异度、后者排在后，右边距被钉死 360、
+      只剩左自动边距；于是 W 在 1280–1895 这段主内容右缘仍压在抽屉下（1366 下约 274px 被压），
+      让位后 main 还与页眉不同轴（1920 下左移约 168px）。
+      改成给这三条横幅 + `<main>` 套一层**全宽外套**、把右边距打在外套上：`container` 的 100% 宽度
+      按缩减后的父宽算，居中与不遮挡同时成立，琥珀横幅与校验错误横幅也跟着让位，窄视口不再被咬一角。
+      页眉右簇的同一颗让位放在 DemoPanel 的流内占位块里（那里没有全宽外套可穿，只能推 flex 行尾）。
+      外套这颗不随抽屉折叠而缩：折叠状态住在 DemoPanel 内部（界面偏好，不进 runner/store），
+      page.tsx 拿不到它；收起态下主内容右侧多空出一条窄边到 360px 的空白——不遮挡、不跳动，是这笔交换的代价。 */}
+      <div className={demoMode ? 'mr-[360px]' : ''}>
+        {/* 课堂演示横幅（规格 §4.7）：退出按钮必须走 runner 的 exit()（clearTimer + 清 phase/queue/lastStep/blocked），
+            只调 store 的 exitDemo() 会给 runner 留一指向已恢复真实进度的队列，下一发 step() 就在老师的数据上落子。
+            这里不订阅 runner 状态（getState() 只在点击时取一次），免得每个步进都重渲染整页 */}
+        {demoMode && (
+          <div className="bg-amber-500 text-white text-center py-2 font-medium">
+            课堂演示中 · 全部改动只在内存，退出即恢复
+            <span className="ml-3">第{operation.currentYear}年第{operation.currentQuarter}季</span>
+            <button
+              onClick={() => useDemoRunner.getState().exit()}
+              className="ml-3 bg-white/20 hover:bg-white/30 text-white text-sm px-3 py-1 rounded-full"
+            >
+              退出演示
+            </button>
+          </div>
+        )}
+
+        {/* 暂停横幅 */}
+        {state.isPaused && (
+          <div className="bg-orange-500 text-white text-center py-2 font-medium">
+            运营已暂停（教学讲解模式）—— 所有操作暂时不可用，点击右上角"继续运营"恢复
+          </div>
+        )}
+
+        {/* 校验错误提示 */}
+        {validationError && (
+          <div className="container mx-auto px-4 pt-4">
+            <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-lg flex justify-between items-center">
+              <span className="text-sm">{validationError}</span>
+              <button onClick={() => setValidationError(null)} className="text-red-500 hover:text-red-700 ml-4">✕</button>
+            </div>
+          </div>
+        )}
+
+      {/* 主要内容区域（原来的 6 空格缩进整块保留，只为让位外套那层不重排这 300 多行） */}
+      <main className="container mx-auto px-4 py-6">
         {/* 导航选项卡 */}
         <div className="bg-white rounded-lg shadow-md p-4 mb-6">
           <div className="flex space-x-4">
@@ -460,6 +482,7 @@ export default function Home() {
         {/* 运营流程 */}
         {activeCenter === 'operation' && <OperationCenter />}
       </main>
+      </div>
     </div>
   );
 }
