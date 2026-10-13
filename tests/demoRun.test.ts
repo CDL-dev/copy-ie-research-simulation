@@ -33,6 +33,17 @@ const withStepClock = (run: () => void): void => {
   try { run(); } finally { Date.now = real; }
 };
 
+/**
+ * 把 Date.now() 钉在同一个毫秒：修 7 那条要复刻的是"同步批量必然落在同一毫秒"这一面，
+ * 机器快一点两次调用就跨了毫秒、测试就白跑（不是放宽断言，是把前提装上，和 withStepClock 同理）。
+ */
+const withFrozenClock = (run: () => void): void => {
+  const real = Date.now;
+  const fixed = real();
+  Date.now = () => fixed;
+  try { run(); } finally { Date.now = real; }
+};
+
 /** 整局里每种 op.kind 各执行了几步（规格 §10 第 12 条的读数按这个口径锁死） */
 type OpCounts = Record<string, number>;
 
@@ -274,5 +285,32 @@ describe('lastStep：刚执行的那一步（审查修 5）', () => {
     expect(runner().lastStep?.stepId).toBe('q-6');
     expect(runner().queue[0]?.stepId).not.toBe('q-6');
     expect(runner().phase).toBe('paused');    // 讲解点自动停
+  });
+});
+
+describe('同步批量的原料单 id（审查修 7）', () => {
+  it('一次 skipQuarter 里的多张原料单 id 不重复', () => {
+    // 本局剧本每季只产 1 张原料单（P1 的 BOM 只有 R1），造不出"一季两张"的自然局面，
+    // 所以队列手工摆两张进去，并用**钉死的毫秒**复刻同步批量的真实形态
+    // （规格 §9-7：演示中面板可交互，教师一次「取消原料订单」就会碰到同 id 的连带删除）。
+    withFrozenClock(() => {
+      runner().start();
+      // R3/R4（提前期 2 季）而不是 R1/R2：skipQuarter 末尾那步 nextQuarter 会让提前期 1 季的单到货出库，
+      // 断言时池子里就只剩一张了，测不到"两张同 id"。
+      useDemoRunner.setState({
+        queue: [
+          mkStep('q-6', { kind: 'placeRawMaterialOrder', materialType: 'R3', quantity: 1 }),
+          mkStep('q-6', { kind: 'placeRawMaterialOrder', materialType: 'R4', quantity: 1 }),
+          mkStep('q-20', { kind: 'nextQuarter' }),
+        ],
+      });
+      runner().skipQuarter();
+    });
+    const ids = store().state.logistics.rawMaterialOrders.map((o) => o.id);
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    // 这条钉的是修 7 之前的缺陷：原料单 id 曾经只有 `order-${Date.now()}`（store:1543，不带序号），
+    // 同毫秒的两张就是同 id → LogisticsCenter.tsx:146 的 `key={order.id}` 是 React 重复键，
+    // 而取消按 id `filter`（:1605）会把同毫秒的几张一起删掉、却只按第一张写日志（:1601 只退款一张）。
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

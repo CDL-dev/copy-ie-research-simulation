@@ -4,8 +4,8 @@ import { absQuarter, fromAbsQuarter, emptyLedger, settleDueShortLoans, settleLon
 import { MARKET_DEVELOP_YEARS, ISO_REQUIRED_YEARS, generateYearOrders } from '../config/marketDemand';
 import { RESTATED_FULL_NET_FROM_VERSION, kindOfLog, rebuildRestatedChain } from '../utils/restatement';
 
-// 全局状态，用于跟踪重置次数
-let resetCount = 0;
+// 全局状态：resetCount 跟踪重置次数；rawMaterialOrderSeq 给原料订单 id 带序号（:1543，与订货会订单 id 的 `-${i}`（:1748）同一个目的——同一毫秒里的几张单必须有不同主键，否则按 id 取消会把几张一起删掉）。两个计数器并成一条 let 也是刻意的：本文件的行号被规格与测试当证据引用，多一行就全体错位。
+let resetCount = 0, rawMaterialOrderSeq = 0;
 
 // 企业初始状态（严格遵循课程标准，见设计规格第2/3节）：
 // 现金20M + 应收15M + 在制品8M + 成品6M + 原料3M = 流动资产52M；
@@ -1540,7 +1540,7 @@ export const useEnterpriseStore = create<{
       const arrivalAbs = orderAbs + material.leadTime;
       const arrival = fromAbsQuarter(arrivalAbs);
       const newOrder = {
-        id: `order-${Date.now()}`,
+        id: `order-${Date.now()}-${rawMaterialOrderSeq++}`,   // 带序号（修 7）：原来只有 Date.now()，同步批量（演示的 skipQuarter/单步、脚本化驱动）里一季内几张原料单落同一毫秒 → 同 id 多张 → LogisticsCenter.tsx:146 的 `key={order.id}` 是重复键，取消按 id `filter`（:1605）会把同毫秒的几张一起删掉、却只按第一张写日志。与订货会订单 id（:1748）同写法。
         materialType,
         quantity,
         price: material.price,
