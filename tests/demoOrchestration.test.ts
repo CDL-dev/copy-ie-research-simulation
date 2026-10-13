@@ -94,6 +94,31 @@ describe('整季编排', () => {
     expect(kinds).toContain('selectOrder');   // 防空断言：开局 P1 可承诺 15 件，两张 1 件单必被选中
     expect(kinds.indexOf('selectOrder')).toBeGreaterThan(kinds.indexOf('enterOrderMeeting'));
   });
+
+  // 遗留 1（Task 7 清）：ownSpend 以前把"下原料单"划给 estAutoOutlay 覆盖，是假的——
+  // 那边的 arriving 只扫季初在途单，扫不到本序列接下来才下的这张；R1/R2 提前期 1（store:145-146、
+  // :1540 arrivalAbs = nowAbs + leadTime），到货期恰是 nextAbs，也就是"下一次推进就要扣的钱"两不沾。
+  // 这条用例是那个修复的回归闸：floor 少了这 4M 就不会贴现，多这 4M 就必须贴现。
+  it('本季下的短提前期原料单计入自有支出：现金垫因此被压穿时当场逼出贴现', () => {
+    const s = createFreshState();
+    s.operation.currentQuarter = 2;               // 非年初、非跨年：estAutoOutlay 的其他项在开局态全是 0
+    s.logistics.rawMaterials[0].quantity = 0;      // R1 清空 → materialSteps 必下一张 R1 单
+    s.finance.cash = 8;
+    s.finance.accountsReceivable = [0, 0, 0, 14];  // 够贴现一次 7M（到账 6M）
+    const kinds = decideQuarter(s, intent({ cashPad: 6 })).map((d) => d.op.kind);
+    expect(kinds).toContain('placeRawMaterialOrder');      // 防空断言：确有一张本季下的单
+    expect(kinds).toContain('discountReceivable');         // floor = 0 + 6 + 4M 料款 > 8 → 必须自救
+
+    // 对照组：料备足了就不下单，同一份现金/应收/现金垫就不该贴现——证明上面那条不是恒绿
+    const stocked = createFreshState();
+    stocked.operation.currentQuarter = 2;
+    stocked.logistics.rawMaterials[0].quantity = 20;
+    stocked.finance.cash = 8;
+    stocked.finance.accountsReceivable = [0, 0, 0, 14];
+    const stockedKinds = decideQuarter(stocked, intent({ cashPad: 6 })).map((d) => d.op.kind);
+    expect(stockedKinds).not.toContain('placeRawMaterialOrder');
+    expect(stockedKinds).not.toContain('discountReceivable');
+  });
 });
 
 // 编排不变式（裁定 3）：简报 4 条只覆盖了第2季的两种年初动作与"最后一项是 nextQuarter"的一次采样，

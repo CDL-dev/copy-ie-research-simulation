@@ -224,7 +224,10 @@ export const estAutoOutlay = (s: EnterpriseState): number => {
   // 与"本季新建线付的首期"不重叠：首期由 ownSpend 计，这一项是**下一次推进**要扣的那一期。
   const installing = linesOf(s)
     .filter((l) => l.status === 'installing')
-    .reduce((sum, l) => sum + l.purchasePrice / Math.max(l.installationPeriod, 1), 0);
+    // 除零/NaN 守卫与 :38（产能侧）/:90（备料侧）同一口径：Math.max(NaN, 1) 仍是 NaN，
+    // NaN 一经求和就污染整个 floor，再经 rescueSteps 的 `cash >= floor`（NaN 比较恒 false）
+    // 让自救静默返回 []——那正是"下界形同没有"。`>0 ? : 1` 对 0/负数/NaN 一律兜成 1 季。
+    .reduce((sum, l) => sum + l.purchasePrice / (l.installationPeriod > 0 ? l.installationPeriod : 1), 0);
   const arriving = s.logistics.rawMaterialOrders
     .filter((o) => o.arrivalPeriod === nextAbs)
     .reduce((sum, o) => sum + o.quantity * o.price, 0);
@@ -253,6 +256,8 @@ const lineFirstPayment = (op: Extract<DemoOp, { kind: 'addProductionLine' }>): n
 
 /** decide 自己在本季发出去的手动现金支出（修 3）。金额全部来自将要执行的那几步，不是复算引擎。 */
 const ownSpend = (steps: DemoStep[], s: EnterpriseState): number => {
+  const nowAbs = absQuarter(s.operation.currentYear, s.operation.currentQuarter);
+  const nextAbs = nowAbs + 1;
   let spend = 0;
   for (const d of steps) {
     switch (d.op.kind) {
@@ -262,8 +267,26 @@ const ownSpend = (steps: DemoStep[], s: EnterpriseState): number => {
       case 'investISOCertification': spend += 1; break;            // 同上（store:1900）
       case 'investProductR_D': spend += 1; break;                  // 启动步不传 amount → 默认一期 1M（store:824-828）
       case 'startProduction': spend += PROCESS_FEE; break;         // 开工当场付加工费（store:1288-1297）
+      // 上线首期。这里的口径**比引擎宽**：引擎在厂房容量满（store:917-919）或该类型线配额耗尽
+      // （store:925-932 `usedCount >= productionLineLimits`）时是 `return state`——静默空操作，
+      // 既不扣钱也不写 validationError。ownSpend 无从知道那一步会不会真落下去，只能照全额计，
+      // 于是 floor 虚高（保守侧多要求贴现一次）。真修要 productionSteps 也查 s.productionLineLimits，
+      // 那属 Task 4 的收口，本轮只点明不对称；runner 侧不会漏——空操作不改引用，照样被判撞门停下。
       case 'addProductionLine': spend += lineFirstPayment(d.op); break;
-      default: break;   // 贷款/卖厂房/交货是现金流入；下单付料在到货季（引擎侧，已由 estAutoOutlay 覆盖）
+      case 'placeRawMaterialOrder': {
+        // 原料单到货季才付款（store:1540 `arrivalAbs = nowAbs + leadTime`），但**不能**说这条已被
+        // estAutoOutlay 覆盖：那边的 `arriving` 只扫季初已在途的单（:228 读 s.logistics.rawMaterialOrders），
+        // 扫不到本序列接下来才下的这一张。R1/R2 提前期 1（store:145-146），本季下单的到货期恰是 nextAbs，
+        // 也就是"下一次推进就要扣"——两不沾的结果是 floor 虚低、rescueSteps 少贴现一次。
+        // 计法只用状态里已有的两个入参（下单量 × 该料单价），不复算引擎的结算逻辑。
+        // 无双重计入：这一张在下季的 estAutoOutlay 里到达货期已 !== 那季的 nextAbs，不会再被算第二遍。
+        // 先落到局部 const：TS 的属性收窄不进闭包，直接在 `.find` 回调里写 d.op.materialType 会退回整个联合类型。
+        const op = d.op;
+        const material = s.logistics.rawMaterials.find((m) => m.type === op.materialType);
+        if (material && nowAbs + material.leadTime === nextAbs) spend += op.quantity * material.price;
+        break;
+      }
+      default: break;   // 贷款/贴现/交货/卖厂房是现金流入或不减现金；R3/R4（提前期 2）到货在下一季之后，由那时的 estAutoOutlay 接手
     }
   }
   return spend;
